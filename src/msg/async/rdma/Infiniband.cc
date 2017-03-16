@@ -356,7 +356,7 @@ Infiniband::ProtectionDomain::~ProtectionDomain()
 
 
 Infiniband::MemoryManager::Chunk::Chunk(ibv_mr* m, uint32_t len, char* b)
-  : mr(m), bytes(len), offset(0), buffer(b)
+  : mr(m), bytes(len), offset(0), shared(1), buffer(b)
 {
 }
 
@@ -434,6 +434,7 @@ void Infiniband::MemoryManager::Chunk::clear()
 {
   offset = 0;
   bound = 0;
+  shared = 1;
 }
 
 Infiniband::MemoryManager::Cluster::Cluster(MemoryManager& m, uint32_t s)
@@ -484,13 +485,18 @@ int Infiniband::MemoryManager::Cluster::fill(uint32_t num)
   return 0;
 }
 
-void Infiniband::MemoryManager::Cluster::take_back(std::vector<Chunk*> &ck)
+unsigned Infiniband::MemoryManager::Cluster::take_back(std::vector<Chunk*> &ck)
 {
+  unsigned i = 0;
   Mutex::Locker l(lock);
   for (auto c : ck) {
-    c->clear();
-    free_chunks.push_back(c);
+    if (--c->shared == 0) {
+      c->clear();
+      free_chunks.push_back(c);
+      i++;
+    }
   }
+  return i;
 }
 
 int Infiniband::MemoryManager::Cluster::get_buffers(std::vector<Chunk*> &chunks, size_t bytes)
@@ -571,9 +577,9 @@ void Infiniband::MemoryManager::register_rx_tx(uint32_t size, uint32_t rx_num, u
   send->fill(tx_num);
 }
 
-void Infiniband::MemoryManager::return_tx(std::vector<Chunk*> &chunks)
+unsigned Infiniband::MemoryManager::return_tx(std::vector<Chunk*> &chunks)
 {
-  send->take_back(chunks);
+  return send->take_back(chunks);
 }
 
 int Infiniband::MemoryManager::get_send_buffers(std::vector<Chunk*> &c, size_t bytes)

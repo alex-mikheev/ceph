@@ -19,6 +19,7 @@
 
 #include <infiniband/verbs.h>
 
+#include <atomic>
 #include <string>
 #include <vector>
 
@@ -89,6 +90,7 @@ class Infiniband {
       uint32_t bytes;
       uint32_t bound;
       uint32_t offset;
+      std::atomic_uint shared;
       char* buffer;
     };
 
@@ -98,7 +100,7 @@ class Infiniband {
       ~Cluster();
 
       int fill(uint32_t num);
-      void take_back(std::vector<Chunk*> &ck);
+      unsigned take_back(std::vector<Chunk*> &ck);
       int get_buffers(std::vector<Chunk*> &chunks, size_t bytes);
       Chunk *get_chunk_by_buffer(const char *c) {
         uint32_t idx = (c - base) / buffer_size;
@@ -125,7 +127,7 @@ class Infiniband {
     void* malloc_huge_pages(size_t size);
     void free_huge_pages(void *ptr);
     void register_rx_tx(uint32_t size, uint32_t rx_num, uint32_t tx_num);
-    void return_tx(std::vector<Chunk*> &chunks);
+    unsigned return_tx(std::vector<Chunk*> &chunks);
     int get_send_buffers(std::vector<Chunk*> &c, size_t bytes);
     int get_channel_buffers(std::vector<Chunk*> &chunks, size_t bytes);
     bool is_tx_buffer(const char* c) { return send->is_my_buffer(c); }
