@@ -445,7 +445,7 @@ Infiniband::MemoryManager::Cluster::Cluster(MemoryManager& m, uint32_t s)
 Infiniband::MemoryManager::Cluster::~Cluster()
 {
   char *p = chunk_base;
-  for (uint32_t i = 0; i < num_chunk; i++){
+  for (uint32_t i = 0; i < num_free_chunk; i++){
     Chunk *chunk = reinterpret_cast<Chunk*>(p);
     chunk->~Chunk();
     p += sizeof(Chunk);
@@ -461,7 +461,6 @@ Infiniband::MemoryManager::Cluster::~Cluster()
 int Infiniband::MemoryManager::Cluster::fill(uint32_t num)
 {
   assert(!base);
-  num_chunk = num;
   uint32_t bytes = buffer_size * num;
   if (manager.enabled_huge_page) {
     base = (char*)manager.malloc_huge_pages(bytes);
@@ -482,6 +481,7 @@ int Infiniband::MemoryManager::Cluster::fill(uint32_t num)
     free_chunks.push_back(chunk);
     ptr += sizeof(Chunk);
   }
+  num_free_chunk = num;
   return 0;
 }
 
@@ -493,6 +493,7 @@ unsigned Infiniband::MemoryManager::Cluster::take_back(std::vector<Chunk*> &ck)
     if (--c->shared == 0) {
       c->clear();
       free_chunks.push_back(c);
+      ++num_free_chunk;
       i++;
     }
   }
@@ -512,6 +513,7 @@ int Infiniband::MemoryManager::Cluster::get_buffers(std::vector<Chunk*> &chunks,
     r = free_chunks.size();
     for (auto c : free_chunks)
       chunks.push_back(c);
+    num_free_chunk = 0;
     free_chunks.clear();
     return r;
   }
@@ -523,6 +525,7 @@ int Infiniband::MemoryManager::Cluster::get_buffers(std::vector<Chunk*> &chunks,
     chunks.push_back(free_chunks.back());
     free_chunks.pop_back();
   }
+  num_free_chunk -= num;
   return r;
 }
 
