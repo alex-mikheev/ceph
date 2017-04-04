@@ -80,6 +80,7 @@ class Device {
   bool initialized = false;
   EventCallbackRef async_handler;
   Infiniband *infiniband;
+  vector<Chunk*> m_rx_chunks;
 
  public:
   explicit Device(CephContext *c, Infiniband *ib, ibv_device* d);

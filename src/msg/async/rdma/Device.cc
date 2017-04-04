@@ -194,6 +194,7 @@ void Device::uninit()
   delete rx_cc;
   delete tx_cc;
 
+  memory_manager->return_rx(m_rx_chunks);
   assert(ibv_destroy_srq(srq) == 0);
   delete memory_manager;
   delete pd;
@@ -315,10 +316,9 @@ int Device::post_chunk(Chunk* chunk)
 
 int Device::post_channel_cluster()
 {
-  vector<Chunk*> free_chunks;
-  int r = memory_manager->get_channel_buffers(free_chunks, 0);
+  int r = memory_manager->get_channel_buffers(m_rx_chunks, 0);
   assert(r > 0);
-  for (vector<Chunk*>::iterator iter = free_chunks.begin(); iter != free_chunks.end(); ++iter) {
+  for (vector<Chunk*>::iterator iter = m_rx_chunks.begin(); iter != m_rx_chunks.end(); ++iter) {
     r = post_chunk(*iter);
     assert(r == 0);
   }
