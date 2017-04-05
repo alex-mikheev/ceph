@@ -182,3 +182,6 @@
   replicated rule in the CRUSH map for replicated pools.  Erasure
   coded pools have rules that are automatically created for them if they are
   not specified at pool creation time.
+* When using ceph systemd services with RDMA, a script is run that adds/removes
+  configurations to the systemd service file. Therefore,the rdma option in the
+  ceph.conf should not be edited before stopping the service.
