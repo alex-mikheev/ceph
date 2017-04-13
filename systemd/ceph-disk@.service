@@ -8,3 +8,4 @@ Type=oneshot
 KillMode=none
 ExecStart=/bin/sh -c 'timeout 120 flock /var/lock/ceph-disk-$(basename %f) /usr/sbin/ceph-disk --verbose --log-stdout trigger --sync %f'
 TimeoutSec=0
+LimitMEMLOCK=infinity
