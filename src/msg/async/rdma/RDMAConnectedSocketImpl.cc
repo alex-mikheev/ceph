@@ -55,10 +55,12 @@ RDMAConnectedSocketImpl::~RDMAConnectedSocketImpl()
   for (unsigned i=0; i < wc.size(); ++i) {
     ret = infiniband->post_chunk(reinterpret_cast<Chunk*>(wc[i].wr_id));
     assert(ret == 0);
+    dispatcher->rx_buf_release(1);
   }
   for (unsigned i=0; i < buffers.size(); ++i) {
     ret = infiniband->post_chunk(buffers[i]);
     assert(ret == 0);
+    dispatcher->rx_buf_release(1);
   }
 }
 
@@ -280,6 +282,7 @@ ssize_t RDMAConnectedSocketImpl::read(char* buf, size_t len)
         ldout(cct, 20) << __func__ << " got remote close msg..." << dendl;
       }
       assert(infiniband->post_chunk(chunk) == 0);
+      dispatcher->rx_buf_release(1);
     } else {
       if (read == (ssize_t)len) {
         buffers.push_back(chunk);
@@ -291,6 +294,7 @@ ssize_t RDMAConnectedSocketImpl::read(char* buf, size_t len)
       } else {
         read += chunk->read(buf+read, response->byte_len);
         assert(infiniband->post_chunk(chunk) == 0);
+	dispatcher->rx_buf_release(1);
       }
     }
   }
@@ -318,6 +322,7 @@ ssize_t RDMAConnectedSocketImpl::read_buffers(char* buf, size_t len)
     ldout(cct, 25) << __func__ << " this iter read: " << tmp << " bytes." << " offset: " << (*c)->get_offset() << " ,bound: " << (*c)->get_bound()  << ". Chunk:" << *c  << dendl;
     if ((*c)->over()) {
       assert(infiniband->post_chunk(*c) == 0);
+      dispatcher->rx_buf_release(1);
       ldout(cct, 25) << __func__ << " one chunk over." << dendl;
     }
     if (read == len) {
@@ -582,7 +587,12 @@ void RDMAConnectedSocketImpl::cleanup() {
 void RDMAConnectedSocketImpl::notify()
 {
   uint64_t i = 1;
-  write(notify_fd, &i, sizeof(i));
+  int n;
+
+  n = write(notify_fd, &i, sizeof(i));
+  if (n < 0) {
+   lderr(cct) << "NOTIFY FAILED ON FD: " << notify_fd << " errno: " << cpp_strerror(errno) << dendl;
+  }
 }
 
 void RDMAConnectedSocketImpl::shutdown()

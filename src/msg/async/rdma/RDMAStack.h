@@ -102,6 +102,7 @@ class RDMADispatcher : public CephContext::ForkWatcher {
   // fixme: lockfree
   std::list<RDMAWorker*> pending_workers;
   RDMAStack* stack;
+  int m_rx_bufs_in_use;
 
   class C_handle_cq_async : public EventCallback {
     RDMADispatcher *dispatcher;
@@ -141,6 +142,9 @@ class RDMADispatcher : public CephContext::ForkWatcher {
   void post_tx_buffer(std::vector<Chunk*> &chunks);
 
   std::atomic<uint64_t> inflight = {0};
+
+  void rx_buf_use(int n) { m_rx_bufs_in_use += n; }
+  void rx_buf_release(int n) { m_rx_bufs_in_use -= n; }
 };
 
 
