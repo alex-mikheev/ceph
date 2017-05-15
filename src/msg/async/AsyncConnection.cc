@@ -344,6 +344,7 @@ void AsyncConnection::process()
           r = read_until(sizeof(tag), &tag);
           if (r < 0) {
             ldout(async_msgr->cct, 1) << __func__ << " read tag failed" << dendl;
+            lderr(async_msgr->cct) << __func__ << "**pingdebug read tag failed" << dendl;
             goto fail;
           } else if (r > 0) {
             break;
@@ -364,6 +365,7 @@ void AsyncConnection::process()
             state = STATE_OPEN_TAG_CLOSE;
           } else {
             ldout(async_msgr->cct, 0) << __func__ << " bad tag " << (int)tag << dendl;
+            lderr(async_msgr->cct) << __func__ << " **pingdebug bad tag " << (int)tag << dendl;
             goto fail;
           }
 
@@ -376,6 +378,7 @@ void AsyncConnection::process()
           r = read_until(sizeof(*t), state_buffer);
           if (r < 0) {
             ldout(async_msgr->cct, 1) << __func__ << " read keeplive timespec failed" << dendl;
+            lderr(async_msgr->cct) << __func__ << " **pingdebug read keeplive timespec failed" << dendl;
             goto fail;
           } else if (r > 0) {
             break;
@@ -400,6 +403,7 @@ void AsyncConnection::process()
           r = read_until(sizeof(*t), state_buffer);
           if (r < 0) {
             ldout(async_msgr->cct, 1) << __func__ << " read keeplive timespec failed" << dendl;
+            lderr(async_msgr->cct) << __func__ << "**pingdebug read keeplive timespec failed" << dendl;
             goto fail;
           } else if (r > 0) {
             break;
@@ -418,6 +422,7 @@ void AsyncConnection::process()
           r = read_until(sizeof(seq), state_buffer);
           if (r < 0) {
             ldout(async_msgr->cct, 1) << __func__ << " read ack seq failed" << dendl;
+            lderr(async_msgr->cct) << __func__ << " **pingdebug read ack seq failed" << dendl;
             goto fail;
           } else if (r > 0) {
             break;
@@ -448,6 +453,7 @@ void AsyncConnection::process()
           r = read_until(len, state_buffer);
           if (r < 0) {
             ldout(async_msgr->cct, 1) << __func__ << " read message header failed" << dendl;
+            lderr(async_msgr->cct) << __func__ << " **pingdebug read message header failed" << dendl;
             goto fail;
           } else if (r > 0) {
             break;
@@ -574,6 +580,7 @@ void AsyncConnection::process()
             r = read_until(front_len, front.c_str());
             if (r < 0) {
               ldout(async_msgr->cct, 1) << __func__ << " read message front failed" << dendl;
+              lderr(async_msgr->cct) << __func__ << " **pingdebug read message front failed" << dendl;
               goto fail;
             } else if (r > 0) {
               break;
@@ -595,6 +602,7 @@ void AsyncConnection::process()
             r = read_until(middle_len, middle.c_str());
             if (r < 0) {
               ldout(async_msgr->cct, 1) << __func__ << " read message middle failed" << dendl;
+              lderr(async_msgr->cct) << __func__ << " **pingdebug read message middle failed" << dendl;
               goto fail;
             } else if (r > 0) {
               break;
@@ -641,6 +649,7 @@ void AsyncConnection::process()
             r = read_until(read, bp.c_str());
             if (r < 0) {
               ldout(async_msgr->cct, 1) << __func__ << " read data error " << dendl;
+              lderr(async_msgr->cct) << __func__ << " **pingdebug read data error " << dendl;
               goto fail;
             } else if (r > 0) {
               break;
@@ -671,6 +680,7 @@ void AsyncConnection::process()
           r = read_until(len, state_buffer);
           if (r < 0) {
             ldout(async_msgr->cct, 1) << __func__ << " read footer data error " << dendl;
+            lderr(async_msgr->cct) << __func__ << " **pingdebug read footer data error " << dendl;
             goto fail;
           } else if (r > 0) {
             break;
@@ -699,6 +709,7 @@ void AsyncConnection::process()
           Message *message = decode_message(async_msgr->cct, async_msgr->crcflags, current_header, footer, front, middle, data);
           if (!message) {
             ldout(async_msgr->cct, 1) << __func__ << " decode message failed " << dendl;
+            lderr(async_msgr->cct) << __func__ << " **pingdebug decode message failed " << dendl;
             goto fail;
           }
 
@@ -828,13 +839,16 @@ void AsyncConnection::process()
       case STATE_WAIT:
         {
           ldout(async_msgr->cct, 1) << __func__ << " enter wait state, failing" << dendl;
+          lderr(async_msgr->cct) << __func__ << " **pingdebug enter wait state, failing" << dendl;
           goto fail;
         }
 
       default:
         {
-          if (_process_connection() < 0)
+          if (_process_connection() < 0) {
+            lderr(async_msgr->cct) << __func__ << " **pingdebug process connection failed" << dendl;
             goto fail;
+          }
           break;
         }
     }
@@ -845,6 +859,7 @@ void AsyncConnection::process()
   return;
 
  fail:
+  lderr(async_msgr->cct) << __func__ << " **pingdebug connection state machine error" << dendl;
   fault();
 }
 
@@ -1875,7 +1890,23 @@ void AsyncConnection::accept(ConnectedSocket socket, entity_addr_t &addr)
 
 int AsyncConnection::send_message(Message *m)
 {
+  bool do_debug = false;
+
   FUNCTRACE();
+  // raise debug level for ping type messages
+  if (strcmp(m->get_type_name(), "osd_ping") == 0) {
+    do_debug = true;
+  }
+
+  if (do_debug) {
+    lderr(async_msgr->cct)
+		    << "**pingdebug "  << async_msgr->get_myaddr() << " --> "
+		    << get_peer_addr() << " -- "
+		    << *m << " -- " << m << " con "
+		    << m->get_connection().get()
+		    << dendl;
+  }
+
   lgeneric_subdout(async_msgr->cct, ms,
 		   1) << "-- " << async_msgr->get_myaddr() << " --> "
 		      << get_peer_addr() << " -- "
@@ -1935,17 +1966,27 @@ int AsyncConnection::send_message(Message *m)
       prepare_send_message(get_features(), m, bl);
     logger->inc(l_msgr_send_messages_inline);
     if (write_message(m, bl, false) < 0) {
+      if (do_debug) {
+        lderr(async_msgr->cct) << __func__ << " **pingdebug send msg failed" << dendl;
+      }
       ldout(async_msgr->cct, 1) << __func__ << " send msg failed" << dendl;
       // we want to handle fault within internal thread
       center->dispatch_event_external(write_handler);
     }
   } else if (can_write == WriteStatus::CLOSED) {
+    if (do_debug) {
+      lderr(async_msgr->cct) << __func__ << " **pingdebug connection closed."
+        << " Drop message " << m << dendl;
+    }
     ldout(async_msgr->cct, 10) << __func__ << " connection closed."
                                << " Drop message " << m << dendl;
     m->put();
   } else {
     out_q[m->get_priority()].emplace_back(std::move(bl), m);
     ldout(async_msgr->cct, 15) << __func__ << " inline write is denied, reschedule m=" << m << dendl;
+    if (do_debug) {
+      lderr(async_msgr->cct) << __func__ << "**pingdebug inline write is denied, reschedule m=" << m << dendl;
+    }
     if (can_write != WriteStatus::REPLACING)
       center->dispatch_event_external(write_handler);
   }
@@ -2033,11 +2074,13 @@ void AsyncConnection::fault()
 {
   if (state == STATE_CLOSED || state == STATE_NONE) {
     ldout(async_msgr->cct, 10) << __func__ << " connection is already closed" << dendl;
+    lderr(async_msgr->cct) << __func__ << " **pingdebug connection is already closed" << dendl;
     return ;
   }
 
   if (policy.lossy && !(state >= STATE_CONNECTING && state < STATE_CONNECTING_READY)) {
     ldout(async_msgr->cct, 1) << __func__ << " on lossy channel, failing" << dendl;
+    lderr(async_msgr->cct) << __func__ << " **pingdebug on lossy channel, failing" << dendl;
     _stop();
     dispatch_queue->queue_reset(this);
     return ;
@@ -2102,6 +2145,7 @@ void AsyncConnection::fault()
 
     state = STATE_CONNECTING;
     ldout(async_msgr->cct, 10) << __func__ << " waiting " << backoff << dendl;
+    lderr(async_msgr->cct) << __func__ << "**pingdebug waiting " << backoff << dendl;
     // woke up again;
     register_time_events.insert(center->create_time_event(
             backoff.to_nsec()/1000, wakeup_handler));
@@ -2427,6 +2471,7 @@ void AsyncConnection::handle_write()
 {
   ldout(async_msgr->cct, 10) << __func__ << dendl;
   ssize_t r = 0;
+  bool do_debug = false;
 
   write_lock.lock();
   if (can_write == WriteStatus::CANWRITE) {
@@ -2441,13 +2486,22 @@ void AsyncConnection::handle_write()
       if (!m)
         break;
 
+      if (m->get_type_name() && strcmp(m->get_type_name(), "osd_ping") == 0) {
+        lderr(async_msgr->cct) 
+          << __func__ << " **pingdebug " << *m << m << dendl;
+	  do_debug = true;
+      }
+
       // send_message or requeue messages may not encode message
       if (!data.length())
         prepare_send_message(get_features(), m, data);
 
       r = write_message(m, data, _has_next_outgoing());
+      if (do_debug) 
+	      lderr(async_msgr->cct) << __func__ << " **pingdebug r=" << r << dendl;
       if (r < 0) {
         ldout(async_msgr->cct, 1) << __func__ << " send msg failed" << dendl;
+        lderr(async_msgr->cct) << __func__ << " **pingdebug send msg failed0" << dendl;
         write_lock.unlock();
         goto fail;
       } else if (r > 0) {
@@ -2472,6 +2526,7 @@ void AsyncConnection::handle_write()
     write_lock.unlock();
     if (r < 0) {
       ldout(async_msgr->cct, 1) << __func__ << " send msg failed" << dendl;
+      lderr(async_msgr->cct) << __func__ << " **pingdebug send msg failed1" << dendl;
       goto fail;
     }
   } else {
@@ -2480,11 +2535,13 @@ void AsyncConnection::handle_write()
     write_lock.lock();
     if (state == STATE_STANDBY && !policy.server && is_queued()) {
       ldout(async_msgr->cct, 10) << __func__ << " policy.server is false" << dendl;
+      lderr(async_msgr->cct) << __func__ << " **pingdebug policy.server is false" << dendl;
       _connect();
     } else if (cs && state != STATE_NONE && state != STATE_CONNECTING && state != STATE_CONNECTING_RE && state != STATE_CLOSED) {
       r = _try_send();
       if (r < 0) {
         ldout(async_msgr->cct, 1) << __func__ << " send outcoming bl failed" << dendl;
+        lderr(async_msgr->cct) << __func__ << " **pingdebug send outcoming bl failed" << dendl;
         write_lock.unlock();
         fault();
         lock.unlock();
@@ -2522,6 +2579,9 @@ void AsyncConnection::tick(uint64_t id)
   auto idle_period = std::chrono::duration_cast<std::chrono::microseconds>(now - last_active).count();
   if (inactive_timeout_us < (uint64_t)idle_period) {
     ldout(async_msgr->cct, 1) << __func__ << " idle(" << idle_period << ") more than "
+                              << inactive_timeout_us
+                              << " us, mark self fault." << dendl;
+    lderr(async_msgr->cct) << __func__ << " **pingdebug idle(" << idle_period << ") more than "
                               << inactive_timeout_us
                               << " us, mark self fault." << dendl;
     fault();

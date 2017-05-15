@@ -38,6 +38,20 @@ double DispatchQueue::get_max_age(utime_t now) const {
 
 uint64_t DispatchQueue::pre_dispatch(Message *m)
 {
+  if (strcmp(m->get_type_name(), "osd_ping") == 0) {
+  lderr(cct) << "<== **pingdebug " << m->get_source_inst()
+	       << " " << m->get_seq()
+	       << " ==== " << *m
+	       << " ==== " << m->get_payload().length()
+	       << "+" << m->get_middle().length()
+	       << "+" << m->get_data().length()
+	       << " (" << m->get_footer().front_crc << " "
+	       << m->get_footer().middle_crc
+	       << " " << m->get_footer().data_crc << ")"
+	       << " " << m << " con " << m->get_connection()
+	       << dendl;
+   }
+
   ldout(cct,1) << "<== " << m->get_source_inst()
 	       << " " << m->get_seq()
 	       << " ==== " << *m

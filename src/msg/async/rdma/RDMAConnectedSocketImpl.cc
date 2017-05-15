@@ -207,6 +207,7 @@ void RDMAConnectedSocketImpl::handle_connection() {
     if (r != -EAGAIN) {
       dispatcher->perf_logger->inc(l_msgr_rdma_handshake_errors);
       ldout(cct, 1) << __func__ << " recv handshake msg failed." << dendl;
+      lderr(cct) << __func__ << " **pingdebug recv handshake msg failed." << dendl;
       fault();
     }
     return;
@@ -224,6 +225,7 @@ void RDMAConnectedSocketImpl::handle_connection() {
     r = infiniband->send_msg(cct, tcp_fd, my_msg);
     if (r < 0) {
       ldout(cct, 1) << __func__ << " send client ack failed." << dendl;
+      lderr(cct) << __func__ << " **pingdebug send client ack failed." << dendl;
       dispatcher->perf_logger->inc(l_msgr_rdma_handshake_errors);
       fault();
     }
@@ -236,6 +238,7 @@ void RDMAConnectedSocketImpl::handle_connection() {
       r = infiniband->send_msg(cct, tcp_fd, my_msg);
       if (r < 0) {
         ldout(cct, 1) << __func__ << " server ack failed." << dendl;
+        lderr(cct) << __func__ << " **pingdebug server ack failed." << dendl;
         dispatcher->perf_logger->inc(l_msgr_rdma_handshake_errors);
         fault();
         return ;
