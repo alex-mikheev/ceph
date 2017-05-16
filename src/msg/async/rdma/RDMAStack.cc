@@ -22,6 +22,7 @@
 #include "common/deleter.h"
 #include "common/Tub.h"
 #include "RDMAStack.h"
+#include "msg/Message.h"
 
 #define dout_subsys ceph_subsys_ms
 #undef dout_prefix
@@ -110,19 +111,19 @@ void RDMADispatcher::handle_async_event()
     if (async_event.event_type == IBV_EVENT_QP_LAST_WQE_REACHED) {
       perf_logger->inc(l_msgr_rdma_async_last_wqe_events);
       uint64_t qpn = async_event.element.qp->qp_num;
-      ldout(cct, 10) << __func__ << " event associated qp=" << async_event.element.qp
+      ldout(cct, 0) << __func__ << " event associated qp=" << async_event.element.qp
                      << " evt: " << ibv_event_type_str(async_event.event_type) << dendl;
       Mutex::Locker l(lock);
       RDMAConnectedSocketImpl *conn = get_conn_lockless(qpn);
       if (!conn) {
-        ldout(cct, 1) << __func__ << " missing qp_num=" << qpn << " discard event" << dendl;
+        ldout(cct, 0) << __func__ << " missing qp_num=" << qpn << " discard event" << dendl;
       } else {
-        ldout(cct, 1) << __func__ << " it's not forwardly stopped by us, reenable=" << conn << dendl;
+        ldout(cct, 0) << __func__ << " it's not forwardly stopped by us, reenable=" << conn << dendl;
         conn->fault();
         erase_qpn_lockless(qpn);
       }
     } else {
-      ldout(cct, 1) << __func__ << " ibv_get_async_event: dev=" << global_infiniband->get_device()->ctxt
+      ldout(cct, 0) << __func__ << " ibv_get_async_event: dev=" << global_infiniband->get_device()->ctxt
                     << " evt: " << ibv_event_type_str(async_event.event_type)
                     << dendl;
     }
@@ -166,11 +167,25 @@ void RDMADispatcher::polling()
         assert(wc[i].opcode == IBV_WC_RECV);
 
         if (response->status == IBV_WC_SUCCESS) {
+            { // debug pings
+                if (chunk->buffer[0] == CEPH_MSGR_TAG_MSG) {
+                    ceph_msg_header *header;
+                    header = (ceph_msg_header *)&chunk->buffer[1];
+                    if (header->type == MSG_OSD_PING) {
+                        lderr(cct) << __func__ << " **pingdebug rx ceph message " << response->byte_len
+                            << " type " << header->type
+                            << " src " << entity_name_t(header->src)
+                            << " front=" << header->front_len
+                            << " data=" << header->data_len
+                            << " off " << header->data_off << dendl;
+                    }
+                }
+            }
           conn = get_conn_lockless(response->qp_num);
           if (!conn) {
             assert(global_infiniband->is_rx_buffer(chunk->buffer));
             r = global_infiniband->post_chunk(chunk);
-            ldout(cct, 1) << __func__ << " csi with qpn " << response->qp_num << " may be dead. chunk " << chunk << " will be back ? " << r << dendl;
+            ldout(cct, 0) << __func__ << " csi with qpn " << response->qp_num << " may be dead. chunk " << chunk << " will be back ? " << r << dendl;
             assert(r == 0);
           } else {
 	    rx_buf_use(1);
@@ -181,7 +196,7 @@ void RDMADispatcher::polling()
           }
         } else {
           perf_logger->inc(l_msgr_rdma_rx_total_wc_errors);
-          ldout(cct, 1) << __func__ << " work request returned error for buffer(" << chunk
+          ldout(cct, 0) << __func__ << " work request returned error for buffer(" << chunk
               << ") status(" << response->status << ":"
               << global_infiniband->wc_status_to_string(response->status) << ")" << dendl;
           assert(global_infiniband->is_rx_buffer(chunk->buffer));
@@ -364,15 +379,15 @@ void RDMADispatcher::handle_tx_event(ibv_wc *cqe, int n)
     if (response->status != IBV_WC_SUCCESS) {
       perf_logger->inc(l_msgr_rdma_tx_total_wc_errors);
       if (response->status == IBV_WC_RETRY_EXC_ERR) {
-        ldout(cct, 1) << __func__ << " connection between server and client not working. Disconnect this now" << dendl;
+        ldout(cct, 0) << __func__ << " connection between server and client not working. Disconnect this now" << dendl;
         perf_logger->inc(l_msgr_rdma_tx_wc_retry_errors);
       } else if (response->status == IBV_WC_WR_FLUSH_ERR) {
-        ldout(cct, 1) << __func__ << " Work Request Flushed Error: this connection's qp="
+        ldout(cct, 0) << __func__ << " Work Request Flushed Error: this connection's qp="
                       << response->qp_num << " should be down while this WR=" << response->wr_id
                       << " still in flight." << dendl;
         perf_logger->inc(l_msgr_rdma_tx_wc_wr_flush_errors);
       } else {
-        ldout(cct, 1) << __func__ << " send work request returned error for buffer("
+        ldout(cct, 0) << __func__ << " send work request returned error for buffer("
                       << response->wr_id << ") status(" << response->status << "): "
                       << global_infiniband->wc_status_to_string(response->status) << dendl;
       }
@@ -381,10 +396,10 @@ void RDMADispatcher::handle_tx_event(ibv_wc *cqe, int n)
       RDMAConnectedSocketImpl *conn = get_conn_lockless(response->qp_num);
 
       if (conn && conn->is_connected()) {
-        ldout(cct, 25) << __func__ << " qp state is : " << conn->get_qp_state() << dendl;//wangzhi
+        ldout(cct, 0) << __func__ << " qp state is : " << conn->get_qp_state() << dendl;//wangzhi
         conn->fault();
       } else {
-        ldout(cct, 1) << __func__ << " missing qp_num=" << response->qp_num << " discard event" << dendl;
+        ldout(cct, 0) << __func__ << " missing qp_num=" << response->qp_num << " discard event" << dendl;
       }
     }
 
