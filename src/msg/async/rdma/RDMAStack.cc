@@ -173,6 +173,7 @@ void RDMADispatcher::polling()
                     header = (ceph_msg_header *)&chunk->buffer[1];
                     if (header->type == MSG_OSD_PING) {
                         lderr(cct) << __func__ << " **pingdebug rx ceph message " << response->byte_len
+                            << " rxb_used " << m_rx_bufs_in_use
                             << " type " << header->type
                             << " src " << entity_name_t(header->src)
                             << " front=" << header->front_len
@@ -237,8 +238,9 @@ void RDMADispatcher::polling()
       if (!num_qp_conn && done)
         break;
 
-      if ((ceph_clock_now() - last_inactive).to_nsec() / 1000 > cct->_conf->ms_async_rdma_polling_us) {
-        handle_async_event();
+      if (cct->_conf->ms_async_rdma_polling_us > 0 &&
+          (ceph_clock_now() - last_inactive).to_nsec() / 1000 > cct->_conf->ms_async_rdma_polling_us) {
+        // handle_async_event();
         if (!rearmed) {
           // Clean up cq events after rearm notify ensure no new incoming event
           // arrived between polling and rearm
