@@ -419,22 +419,32 @@ Infiniband::CompletionQueue::~CompletionQueue()
 
 int Infiniband::CompletionQueue::init()
 {
-  cq = ibv_create_cq(infiniband.device->ctxt, queue_depth, this, channel->get_channel(), 0);
+  int v;
+
+  if (cct->_conf->ms_async_rdma_bind_comp_channel) {
+    v = getpid() % infiniband.device->ctxt->num_comp_vectors;
+  } else {
+    v = 0;
+  }
+  
+  cq = ibv_create_cq(infiniband.device->ctxt, queue_depth, this, channel->get_channel(), v);
   if (!cq) {
     lderr(cct) << __func__ << " failed to create receive completion queue: "
       << cpp_strerror(errno) << dendl;
     return -1;
   }
 
+/*
   if (ibv_req_notify_cq(cq, 0)) {
     lderr(cct) << __func__ << " ibv_req_notify_cq failed: " << cpp_strerror(errno) << dendl;
     ibv_destroy_cq(cq);
     cq = nullptr;
     return -1;
   }
+  */
 
   channel->bind_cq(cq);
-  ldout(cct, 20) << __func__ << " successfully create cq=" << cq << dendl;
+  ldout(cct, 0) << __func__ << " successfully create cq=" << cq << " compl_vector " << v << dendl;
   return 0;
 }
 
