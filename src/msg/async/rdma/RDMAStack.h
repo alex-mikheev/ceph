@@ -143,8 +143,11 @@ class RDMADispatcher : public CephContext::ForkWatcher {
 
   std::atomic<uint64_t> inflight = {0};
 
+  // bufer is 'used' under the dispatcher lock
+  // but released from the socket so it needs lock
+  // on release
   void rx_buf_use(int n) { m_rx_bufs_in_use += n; }
-  void rx_buf_release(int n) { m_rx_bufs_in_use -= n; }
+  void rx_buf_release(int n) { Mutex::Locker l(lock); m_rx_bufs_in_use -= n; }
 };
 
 
