@@ -45,6 +45,7 @@ RDMAConnectedSocketImpl::~RDMAConnectedSocketImpl()
   cleanup();
   worker->remove_pending_conn(this);
   dispatcher->erase_qpn(my_msg.qpn);
+  dispatcher->rx_buf_release(wc.size() + buffers.size());
   Mutex::Locker l(lock);
   if (notify_fd >= 0)
     ::close(notify_fd);
@@ -55,12 +56,10 @@ RDMAConnectedSocketImpl::~RDMAConnectedSocketImpl()
   for (unsigned i=0; i < wc.size(); ++i) {
     ret = infiniband->post_chunk(reinterpret_cast<Chunk*>(wc[i].wr_id));
     assert(ret == 0);
-    dispatcher->rx_buf_release(1);
   }
   for (unsigned i=0; i < buffers.size(); ++i) {
     ret = infiniband->post_chunk(buffers[i]);
     assert(ret == 0);
-    dispatcher->rx_buf_release(1);
   }
 }
 
