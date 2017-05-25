@@ -129,6 +129,15 @@ class RDMADispatcher : public CephContext::ForkWatcher {
       ++num_pending_workers;
     }
   }
+  bool is_on_pending(RDMAWorker* w) {
+    Mutex::Locker l(w_lock);
+    auto it = std::find(pending_workers.begin(), pending_workers.end(), w);
+
+    return it == pending_workers.end() ? false : true;
+  }
+  
+  int pending_count() { return pending_workers.size(); } 
+
   RDMAStack* get_stack() { return stack; }
   RDMAConnectedSocketImpl* get_conn_lockless(uint32_t qp);
   void erase_qpn_lockless(uint32_t qpn);
@@ -148,6 +157,7 @@ class RDMADispatcher : public CephContext::ForkWatcher {
   // on release
   void rx_buf_use(int n) { m_rx_bufs_in_use += n; }
   void rx_buf_release(int n) { Mutex::Locker l(lock); m_rx_bufs_in_use -= n; }
+  utime_t last_tx_compl;
 };
 
 
@@ -201,6 +211,15 @@ class RDMAWorker : public Worker {
     assert(center.in_thread());
     pending_sent_conns.remove(o);
   }
+  bool is_on_pending(RDMAConnectedSocketImpl *o) {
+    auto it = std::find(pending_sent_conns.begin(), pending_sent_conns.end(), o);
+
+    return it == pending_sent_conns.end() ? false : true;
+  }
+  int pending_count() {
+    return pending_sent_conns.size();
+  }
+
   void handle_pending_message();
   void set_stack(RDMAStack *s) { stack = s; }
   void notify_worker() {
@@ -277,6 +296,10 @@ class RDMAConnectedSocketImpl : public ConnectedSocketImpl {
       active = false;
     }
   };
+  bool is_hb;
+  int  pending_size() {
+    return pending_bl.length();
+  }
 };
 
 class RDMAServerSocketImpl : public ServerSocketImpl {

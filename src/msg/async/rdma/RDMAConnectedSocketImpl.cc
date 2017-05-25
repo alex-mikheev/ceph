@@ -25,7 +25,7 @@ RDMAConnectedSocketImpl::RDMAConnectedSocketImpl(CephContext *cct, Infiniband* i
   : cct(cct), connected(0), error(0), infiniband(ib),
     dispatcher(s), worker(w), lock("RDMAConnectedSocketImpl::lock"),
     is_server(false), con_handler(new C_handle_connection(this)),
-    active(false)
+    active(false), is_hb(false)
 {
   qp = infiniband->create_queue_pair(
 				     cct, s->get_tx_cq(), s->get_rx_cq(), IBV_QPT_RC);
@@ -442,8 +442,25 @@ ssize_t RDMAConnectedSocketImpl::submit(bool more)
     auto chunk_idx = tx_buffers.size();
     int ret = worker->get_reged_mem(this, tx_buffers, bytes);
     if (ret == 0) {
-      ldout(cct, 1) << __func__ << " no enough buffers in worker " << worker << dendl;
+      //ldout(cct, 1) << __func__ << " no enough buffers in worker " << worker << dendl;
       worker->perf_logger->inc(l_msgr_rdma_tx_no_mem);
+      if (is_hb) {
+        ldout(cct, 0) << " submit.fill_tx_via_copy " 
+                    << " out of tx buffers socket " << socket
+                    << " worker " << this 
+                    << " txb_used " << dispatcher->inflight
+                    << " pending bytes " << pending_bl.length() 
+                    << " last_tx_compl " << dispatcher->last_tx_compl
+                    << " socket_pending " << worker->is_on_pending(this)
+                    << " total_sock_pending " << worker->pending_count()
+                    << " worker pending " << dispatcher->is_on_pending(worker)
+                    << " total_wrk_pending " << dispatcher->pending_count()
+                    << dendl;
+        if (pending_bl.length() > 122) { 
+          lderr(cct) << "submit.fill_tx_via_copy oops attempt to send aggr ping message " << dendl;
+        }
+      }
+
       return 0;
     }
 

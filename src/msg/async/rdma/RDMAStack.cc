@@ -149,6 +149,7 @@ void RDMADispatcher::polling()
     if (tx_ret > 0) {
       ldout(cct, 20) << __func__ << " tx completion queue got " << tx_ret
                      << " responses."<< dendl;
+      last_tx_compl = ceph_clock_now();
       handle_tx_event(wc, tx_ret);
     }
 
@@ -167,21 +168,6 @@ void RDMADispatcher::polling()
         assert(wc[i].opcode == IBV_WC_RECV);
 
         if (response->status == IBV_WC_SUCCESS) {
-            { // debug pings
-                if (chunk->buffer[0] == CEPH_MSGR_TAG_MSG) {
-                    ceph_msg_header *header;
-                    header = (ceph_msg_header *)&chunk->buffer[1];
-                    if (header->type == MSG_OSD_PING) {
-                        lderr(cct) << __func__ << " **pingdebug rx ceph message " << response->byte_len
-                            << " rxb_used " << m_rx_bufs_in_use
-                            << " type " << header->type
-                            << " src " << entity_name_t(header->src)
-                            << " front=" << header->front_len
-                            << " data=" << header->data_len
-                            << " off " << header->data_off << dendl;
-                    }
-                }
-            }
           conn = get_conn_lockless(response->qp_num);
           if (!conn) {
             assert(global_infiniband->is_rx_buffer(chunk->buffer));
@@ -189,10 +175,30 @@ void RDMADispatcher::polling()
             ldout(cct, 0) << __func__ << " csi with qpn " << response->qp_num << " may be dead. chunk " << chunk << " will be back ? " << r << dendl;
             assert(r == 0);
           } else {
+            { // debug pings
+                if (chunk->buffer[0] == CEPH_MSGR_TAG_MSG) {
+                    ceph_msg_header *header;
+                    header = (ceph_msg_header *)&chunk->buffer[1];
+                    if (header->type == MSG_OSD_PING) {
+                        lderr(cct) << __func__ 
+                            << " **pingdebug rx ceph message " << response->byte_len
+                            << " rxb_used " << m_rx_bufs_in_use
+                            << " txb_used " << inflight
+                            << " on conn " << conn
+                            << " type " << header->type
+                            << " src " << entity_name_t(header->src)
+                            << " front=" << header->front_len
+                            << " data=" << header->data_len
+                            << " off " << header->data_off << dendl;
+                        conn->is_hb = true;
+                    }
+                }
+            }
 	    rx_buf_use(1);
 	    if (m_rx_bufs_in_use >= (int)cct->_conf->ms_async_rdma_receive_buffers) {
 		lderr(cct) << __func__ << " ALL RX BUFFERS ARE IN USE: " << m_rx_bufs_in_use << " >= " << cct->_conf->ms_async_rdma_receive_buffers << dendl;
 	    }
+            // IF msg is ping mark as ping
             polled[conn].push_back(*response);
           }
         } else {
@@ -532,12 +538,23 @@ void RDMAWorker::handle_pending_message()
   while (!pending_sent_conns.empty()) {
     RDMAConnectedSocketImpl *o = pending_sent_conns.front();
     pending_sent_conns.pop_front();
+    if (o->is_hb) {
+      ldout(cct, 0) << __func__ 
+                    << " socket " << o
+                    << " pending_bytes " << o->pending_size()
+                    << dendl;
+    }
     if (!done.count(o)) {
       done.insert(o);
       ssize_t r = o->submit(false);
+      if (o->is_hb) {
+        ldout(cct, 0) << __func__ << " sent pending bl socket=" << o << " r=" << r << dendl;
+      }
+
       ldout(cct, 20) << __func__ << " sent pending bl socket=" << o << " r=" << r << dendl;
       if (r < 0) {
         if (r == -EAGAIN) {
+          //ldout(cct, 0) << __func__ << " q: " << pending_sent_conns.size() << " egain on " << o << dendl;
           pending_sent_conns.push_back(o);
           dispatcher->make_pending_worker(this);
           return ;
