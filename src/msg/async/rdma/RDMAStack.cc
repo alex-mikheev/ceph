@@ -524,6 +524,9 @@ int RDMAWorker::get_reged_mem(RDMAConnectedSocketImpl *o, std::vector<Chunk*> &c
 
   if (o) {
     if (!is_on_pending(o)) {
+      if (o->is_hb) {
+        ldout(cct, 0) << __func__ << " sock " << o << " need " << bytes << " bytes, reserve " << got << " registered  bytes, inflight " << dispatcher->inflight << dendl;
+      }
       pending_sent_conns.push_back(o);
     }
     dispatcher->make_pending_worker(this);

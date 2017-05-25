@@ -446,8 +446,8 @@ ssize_t RDMAConnectedSocketImpl::submit(bool more)
       worker->perf_logger->inc(l_msgr_rdma_tx_no_mem);
       if (is_hb) {
         ldout(cct, 0) << " submit.fill_tx_via_copy " 
-                    << " out of tx buffers socket " << socket
-                    << " worker " << this 
+                    << " out of tx buffers socket " << this
+                    << " worker " << worker 
                     << " txb_used " << dispatcher->inflight
                     << " pending bytes " << pending_bl.length() 
                     << " last_tx_compl " << dispatcher->last_tx_compl
