@@ -523,8 +523,9 @@ int RDMAWorker::get_reged_mem(RDMAConnectedSocketImpl *o, std::vector<Chunk*> &c
     return r;
 
   if (o) {
-    if (pending_sent_conns.back() != o)
+    if (!is_on_pending(o)) {
       pending_sent_conns.push_back(o);
+    }
     dispatcher->make_pending_worker(this);
   }
   return r;
