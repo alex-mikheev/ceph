@@ -31,7 +31,6 @@ static Tub<Infiniband> global_infiniband;
 
 RDMADispatcher::~RDMADispatcher()
 {
-  done = true;
   polling_stop();
   ldout(cct, 20) << __func__ << " destructing rdma dispatcher" << dendl;
 
@@ -100,6 +99,7 @@ void RDMADispatcher::polling_start()
 
 void RDMADispatcher::polling_stop()
 {
+  done = true;
   if (t.joinable())
     t.join();
 }
