@@ -321,6 +321,7 @@ class Infiniband {
   ProtectionDomain *pd;
   DeviceList *device_list = nullptr;
   RDMADispatcher *dispatcher = nullptr;
+  int             dispatcher_ref_cnt = 0;
   void wire_gid_to_gid(const char *wgid, union ibv_gid *gid);
   void gid_to_wire_gid(const union ibv_gid *gid, char wgid[]);
   CephContext *cct;
@@ -335,6 +336,8 @@ class Infiniband {
   void init();
 
   void set_dispatcher(RDMADispatcher *d);
+  RDMADispatcher* get_dispatcher();
+  void put_dispatcher();
 
   class CompletionChannel {
     static const uint32_t MAX_ACK_EVENT = 5000;

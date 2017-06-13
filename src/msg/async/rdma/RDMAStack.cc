@@ -31,8 +31,9 @@ static Tub<Infiniband> global_infiniband;
 
 RDMADispatcher::~RDMADispatcher()
 {
+  // TODO: check if dtor may be called from ~Infiniband()
+  // normally dtor is called when last RDMAStack is destroyed
   polling_stop();
-  ldout(cct, 20) << __func__ << " destructing rdma dispatcher" << dendl;
 
   assert(qp_conns.empty());
   assert(num_qp_conn == 0);
@@ -46,8 +47,6 @@ RDMADispatcher::~RDMADispatcher()
   delete tx_cc;
   delete rx_cc;
   delete async_handler;
-
-  global_infiniband->set_dispatcher(nullptr);
 }
 
 RDMADispatcher::RDMADispatcher(CephContext* c, RDMAStack* s)
@@ -543,12 +542,17 @@ RDMAStack::RDMAStack(CephContext *cct, const string &t): NetworkStack(cct, t)
 				  " We recommend setting this parameter to infinity" << dendl;
   }
 
-  if (!global_infiniband)
+  if (!global_infiniband) {
     global_infiniband.construct(
       cct, cct->_conf->ms_async_rdma_device_name, cct->_conf->ms_async_rdma_port_num);
-  ldout(cct, 20) << __func__ << " constructing RDMAStack..." << dendl;
-  dispatcher = new RDMADispatcher(cct, this);
-  global_infiniband->set_dispatcher(dispatcher);
+    ldout(cct, 20) << __func__ << " constructing RDMAStack..." << dendl;
+    dispatcher = new RDMADispatcher(cct, this);
+    global_infiniband->set_dispatcher(dispatcher);
+  } else {
+    // If global_infinibad exists it means that there is another instance of
+    // the RDMAStack. In such case use existing dispatcher
+    dispatcher = global_infiniband->get_dispatcher();
+  }
 
   unsigned num = get_num_worker();
   for (unsigned i = 0; i < num; ++i) {
@@ -565,7 +569,7 @@ RDMAStack::~RDMAStack()
     unsetenv("RDMAV_HUGEPAGES_SAFE");	//remove env variable on destruction
   }
 
-  delete dispatcher;
+  global_infiniband->put_dispatcher();
 }
 
 void RDMAStack::spawn_worker(unsigned i, std::function<void ()> &&func)

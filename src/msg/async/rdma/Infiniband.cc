@@ -840,8 +840,11 @@ Infiniband::~Infiniband()
   if (!initialized)
     return;
 
+  // it should not happend because RDMAStack is supposed to be
+  // destroyed before Infiniband
+  // TODO: what happens if exit is triggered by a signal
   if (dispatcher)
-    dispatcher->polling_stop();
+    delete dispatcher;
 
   ibv_destroy_srq(srq);
   delete memory_manager;
@@ -853,8 +856,22 @@ void Infiniband::set_dispatcher(RDMADispatcher *d)
   assert(!d ^ !dispatcher);
 
   dispatcher = d;
-  if (dispatcher != nullptr)
+  if (dispatcher != nullptr) {
     MemoryManager::RxAllocator::set_perf_logger(dispatcher->perf_logger);
+    dispatcher_ref_cnt = 1;
+  }
+}
+
+RDMADispatcher* Infiniband::get_dispatcher() {
+  dispatcher_ref_cnt++;
+  return dispatcher;
+}
+
+void Infiniband::put_dispatcher() {
+  if (--dispatcher_ref_cnt == 0) {
+    delete dispatcher;
+    dispatcher = nullptr;
+  }
 }
 
 /**
