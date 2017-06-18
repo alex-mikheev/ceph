@@ -14,6 +14,9 @@
  *
  */
 
+#include <sys/time.h>
+#include <sys/resource.h>
+
 #include "Infiniband.h"
 #include "common/errno.h"
 #include "common/debug.h"
@@ -775,8 +778,40 @@ int Infiniband::MemoryManager::get_send_buffers(std::vector<Chunk*> &c, size_t b
 Infiniband::Infiniband(CephContext *cct, const std::string &device_name, uint8_t port_num)
   : cct(cct), lock("IB lock"), device_name(device_name), port_num(port_num)
 {
+
+  //
+  //On RDMA MUST be called before fork
+  //
+  int rc = ibv_fork_init();
+  if (rc) {
+     lderr(cct) << __func__ << " failed to call ibv_for_init(). On RDMA must be called before fork. Application aborts." << dendl;
+     ceph_abort();
+  }
+
+  ldout(cct, 20) << __func__ << " ms_async_rdma_enable_hugepage value is: " << cct->_conf->ms_async_rdma_enable_hugepage <<  dendl;
+  if (cct->_conf->ms_async_rdma_enable_hugepage){
+    rc =  setenv("RDMAV_HUGEPAGES_SAFE","1",1);
+    ldout(cct, 20) << __func__ << " RDMAV_HUGEPAGES_SAFE is set as: " << getenv("RDMAV_HUGEPAGES_SAFE") <<  dendl;
+    if (rc) {
+      lderr(cct) << __func__ << " failed to export RDMA_HUGEPAGES_SAFE. On RDMA must be exported before using huge pages. Application aborts." << dendl;
+      ceph_abort();
+    }
+  }
+
+  //Check ulimit
+  struct rlimit limit;
+  getrlimit(RLIMIT_MEMLOCK, &limit);
+  if (limit.rlim_cur != RLIM_INFINITY || limit.rlim_max != RLIM_INFINITY) {
+     lderr(cct) << __func__ << "!!! WARNING !!! For RDMA to work properly user memlock (ulimit -l) must be big enough to allow large amount of registered memory."
+				  " We recommend setting this parameter to infinity" << dendl;
+  }
+
+  dispatcher = std::make_shared<RDMADispatcher>(cct);
+  MemoryManager::RxAllocator::set_perf_logger(dispatcher->perf_logger);
 }
 
+
+// called by worker on connect() or lister()
 void Infiniband::init()
 {
   Mutex::Locker l(lock);
@@ -837,41 +872,25 @@ void Infiniband::init()
 
 Infiniband::~Infiniband()
 {
-  if (!initialized)
-    return;
-
-  // it should not happend because RDMAStack is supposed to be
-  // destroyed before Infiniband
-  // TODO: what happens if exit is triggered by a signal
-  if (dispatcher)
-    delete dispatcher;
-
-  ibv_destroy_srq(srq);
-  delete memory_manager;
-  delete pd;
 }
 
-void Infiniband::set_dispatcher(RDMADispatcher *d)
+std::shared_ptr<RDMADispatcher> Infiniband::get_dispatcher()
 {
-  assert(!d ^ !dispatcher);
-
-  dispatcher = d;
-  if (dispatcher != nullptr) {
-    MemoryManager::RxAllocator::set_perf_logger(dispatcher->perf_logger);
-    dispatcher_ref_cnt = 1;
-  }
-}
-
-RDMADispatcher* Infiniband::get_dispatcher() {
-  dispatcher_ref_cnt++;
   return dispatcher;
 }
 
-void Infiniband::put_dispatcher() {
-  if (--dispatcher_ref_cnt == 0) {
-    delete dispatcher;
-    dispatcher = nullptr;
-  }
+// called when rdma stack is being destroyed. 
+void Infiniband::release() {
+
+    // revert init() if it was the last rdma stack
+    if (dispatcher.use_count() > 1)
+      return;
+
+    dispatcher->polling_stop();
+    ibv_destroy_srq(srq);
+    delete memory_manager;
+    delete pd;
+    initialized = false;
 }
 
 /**
@@ -1064,7 +1083,6 @@ void Infiniband::gid_to_wire_gid(const union ibv_gid *gid, char wgid[])
 Infiniband::QueuePair::~QueuePair()
 {
   if (qp) {
-    ldout(cct, 20) << __func__ << " destroy qp=" << qp << dendl;
     assert(!ibv_destroy_qp(qp));
   }
 }

@@ -15,8 +15,6 @@
  */
 
 #include <poll.h>
-#include <sys/time.h>
-#include <sys/resource.h>
 
 #include "include/str_list.h"
 #include "common/deleter.h"
@@ -31,27 +29,11 @@ static Tub<Infiniband> global_infiniband;
 
 RDMADispatcher::~RDMADispatcher()
 {
-  // TODO: check if dtor may be called from ~Infiniband()
-  // normally dtor is called when last RDMAStack is destroyed
-  polling_stop();
-
-  assert(qp_conns.empty());
-  assert(num_qp_conn == 0);
-  assert(dead_queue_pairs.empty());
-  assert(num_dead_queue_pair == 0);
-
-  tx_cc->ack_events();
-  rx_cc->ack_events();
-  delete tx_cq;
-  delete rx_cq;
-  delete tx_cc;
-  delete rx_cc;
-  delete async_handler;
 }
 
-RDMADispatcher::RDMADispatcher(CephContext* c, RDMAStack* s)
+RDMADispatcher::RDMADispatcher(CephContext* c)
   : cct(c), async_handler(new C_handle_cq_async(this)), lock("RDMADispatcher::lock"),
-  w_lock("RDMADispatcher::for worker pending list"), stack(s)
+  w_lock("RDMADispatcher::for worker pending list")
 {
   PerfCountersBuilder plb(cct, "AsyncMessenger::RDMADispatcher", l_msgr_rdma_dispatcher_first, l_msgr_rdma_dispatcher_last);
 
@@ -93,14 +75,31 @@ void RDMADispatcher::polling_start()
   rx_cq = global_infiniband->create_comp_queue(cct, rx_cc);
   assert(rx_cq);
 
+  done = false;
   t = std::thread(&RDMADispatcher::polling, this);
 }
 
 void RDMADispatcher::polling_stop()
 {
+  if (done)
+    return;
+
   done = true;
   if (t.joinable())
     t.join();
+
+  assert(qp_conns.empty());
+  assert(num_qp_conn == 0);
+  assert(dead_queue_pairs.empty());
+  assert(num_dead_queue_pair == 0);
+
+  tx_cc->ack_events();
+  rx_cc->ack_events();
+  delete tx_cq;
+  delete rx_cq;
+  delete tx_cc;
+  delete rx_cc;
+  delete async_handler;
 }
 
 void RDMADispatcher::handle_async_event()
@@ -514,46 +513,12 @@ void RDMAWorker::handle_pending_message()
 
 RDMAStack::RDMAStack(CephContext *cct, const string &t): NetworkStack(cct, t)
 {
-  //
-  //On RDMA MUST be called before fork
-  //
-
-  int rc = ibv_fork_init();
-  if (rc) {
-     lderr(cct) << __func__ << " failed to call ibv_for_init(). On RDMA must be called before fork. Application aborts." << dendl;
-     ceph_abort();
-  }
-
-  ldout(cct, 20) << __func__ << " ms_async_rdma_enable_hugepage value is: " << cct->_conf->ms_async_rdma_enable_hugepage <<  dendl;
-  if (cct->_conf->ms_async_rdma_enable_hugepage){
-    rc =  setenv("RDMAV_HUGEPAGES_SAFE","1",1);
-    ldout(cct, 20) << __func__ << " RDMAV_HUGEPAGES_SAFE is set as: " << getenv("RDMAV_HUGEPAGES_SAFE") <<  dendl;
-    if (rc) {
-      lderr(cct) << __func__ << " failed to export RDMA_HUGEPAGES_SAFE. On RDMA must be exported before using huge pages. Application aborts." << dendl;
-      ceph_abort();
-    }
-  }
-
-  //Check ulimit
-  struct rlimit limit;
-  getrlimit(RLIMIT_MEMLOCK, &limit);
-  if (limit.rlim_cur != RLIM_INFINITY || limit.rlim_max != RLIM_INFINITY) {
-     lderr(cct) << __func__ << "!!! WARNING !!! For RDMA to work properly user memlock (ulimit -l) must be big enough to allow large amount of registered memory."
-				  " We recommend setting this parameter to infinity" << dendl;
-  }
-
   if (!global_infiniband) {
     global_infiniband.construct(
       cct, cct->_conf->ms_async_rdma_device_name, cct->_conf->ms_async_rdma_port_num);
-    ldout(cct, 20) << __func__ << " constructing RDMAStack..." << dendl;
-    dispatcher = new RDMADispatcher(cct, this);
-    global_infiniband->set_dispatcher(dispatcher);
-  } else {
-    // If global_infinibad exists it means that there is another instance of
-    // the RDMAStack. In such case use existing dispatcher
-    dispatcher = global_infiniband->get_dispatcher();
+    ldout(cct, 20) << __func__ << " constructing IB global context" << dendl;
   }
-
+  dispatcher = global_infiniband->get_dispatcher();
   unsigned num = get_num_worker();
   for (unsigned i = 0; i < num; ++i) {
     RDMAWorker* w = dynamic_cast<RDMAWorker*>(get_worker(i));
@@ -565,11 +530,8 @@ RDMAStack::RDMAStack(CephContext *cct, const string &t): NetworkStack(cct, t)
 
 RDMAStack::~RDMAStack()
 {
-  if (cct->_conf->ms_async_rdma_enable_hugepage){
-    unsetenv("RDMAV_HUGEPAGES_SAFE");	//remove env variable on destruction
-  }
-
-  global_infiniband->put_dispatcher();
+  dispatcher.reset();
+  global_infiniband->release();
 }
 
 void RDMAStack::spawn_worker(unsigned i, std::function<void ()> &&func)

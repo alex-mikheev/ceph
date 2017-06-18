@@ -320,8 +320,7 @@ class Infiniband {
   Device *device;
   ProtectionDomain *pd;
   DeviceList *device_list = nullptr;
-  RDMADispatcher *dispatcher = nullptr;
-  int             dispatcher_ref_cnt = 0;
+  std::shared_ptr<RDMADispatcher> dispatcher = nullptr;
   void wire_gid_to_gid(const char *wgid, union ibv_gid *gid);
   void gid_to_wire_gid(const union ibv_gid *gid, char wgid[]);
   CephContext *cct;
@@ -334,10 +333,11 @@ class Infiniband {
   explicit Infiniband(CephContext *c, const std::string &device_name, uint8_t p);
   ~Infiniband();
   void init();
+  // release resources allocated by init()
+  // if there is no rdma stack that uses them
+  void release();
 
-  void set_dispatcher(RDMADispatcher *d);
-  RDMADispatcher* get_dispatcher();
-  void put_dispatcher();
+  std::shared_ptr<RDMADispatcher> get_dispatcher();
 
   class CompletionChannel {
     static const uint32_t MAX_ACK_EVENT = 5000;
