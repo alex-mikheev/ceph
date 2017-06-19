@@ -776,7 +776,7 @@ int Infiniband::MemoryManager::get_send_buffers(std::vector<Chunk*> &c, size_t b
 }
 
 Infiniband::Infiniband(CephContext *cct, const std::string &device_name, uint8_t port_num)
-  : cct(cct), lock("IB lock"), device_name(device_name), port_num(port_num)
+  : cct(cct->get()), lock("IB lock"), device_name(device_name), port_num(port_num)
 {
 
   //
@@ -872,6 +872,8 @@ void Infiniband::init()
 
 Infiniband::~Infiniband()
 {
+  /* trigger destruction of the last RDMAstack */
+  cct->put();
 }
 
 std::shared_ptr<RDMADispatcher> Infiniband::get_dispatcher()
