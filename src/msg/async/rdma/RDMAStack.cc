@@ -27,8 +27,6 @@
 #undef dout_prefix
 #define dout_prefix *_dout << "RDMAStack "
 
-static Tub<Infiniband> global_infiniband;
-
 RDMADispatcher::~RDMADispatcher()
 {
   polling_stop();
@@ -47,7 +45,7 @@ RDMADispatcher::~RDMADispatcher()
   delete rx_cc;
   delete async_handler;
 
-  global_infiniband->set_dispatcher(nullptr);
+  get_stack()->get_infiniband()->set_dispatcher(nullptr);
 }
 
 RDMADispatcher::RDMADispatcher(CephContext* c, RDMAStack* s)
@@ -85,13 +83,13 @@ RDMADispatcher::RDMADispatcher(CephContext* c, RDMAStack* s)
 
 void RDMADispatcher::polling_start()
 {
-  tx_cc = global_infiniband->create_comp_channel(cct);
+  tx_cc = get_stack()->get_infiniband()->create_comp_channel(cct);
   assert(tx_cc);
-  rx_cc = global_infiniband->create_comp_channel(cct);
+  rx_cc = get_stack()->get_infiniband()->create_comp_channel(cct);
   assert(rx_cc);
-  tx_cq = global_infiniband->create_comp_queue(cct, tx_cc);
+  tx_cq = get_stack()->get_infiniband()->create_comp_queue(cct, tx_cc);
   assert(tx_cq);
-  rx_cq = global_infiniband->create_comp_queue(cct, rx_cc);
+  rx_cq = get_stack()->get_infiniband()->create_comp_queue(cct, rx_cc);
   assert(rx_cq);
 
   t = std::thread(&RDMADispatcher::polling, this);
@@ -109,7 +107,7 @@ void RDMADispatcher::handle_async_event()
   ldout(cct, 30) << __func__ << dendl;
   while (1) {
     ibv_async_event async_event;
-    if (ibv_get_async_event(global_infiniband->get_device()->ctxt, &async_event)) {
+    if (ibv_get_async_event(get_stack()->get_infiniband()->get_device()->ctxt, &async_event)) {
       if (errno != EAGAIN)
        lderr(cct) << __func__ << " ibv_get_async_event failed. (errno=" << errno
                   << " " << cpp_strerror(errno) << ")" << dendl;
@@ -133,7 +131,7 @@ void RDMADispatcher::handle_async_event()
         erase_qpn_lockless(qpn);
       }
     } else {
-      ldout(cct, 1) << __func__ << " ibv_get_async_event: dev=" << global_infiniband->get_device()->ctxt
+      ldout(cct, 1) << __func__ << " ibv_get_async_event: dev=" << get_stack()->get_infiniband()->get_device()->ctxt
                     << " evt: " << ibv_event_type_str(async_event.event_type)
                     << dendl;
     }
@@ -143,7 +141,7 @@ void RDMADispatcher::handle_async_event()
 
 void RDMADispatcher::post_chunk_to_pool(Chunk* chunk) {
   Mutex::Locker l(lock);
-  global_infiniband->post_chunk_to_pool(chunk);
+  get_stack()->get_infiniband()->post_chunk_to_pool(chunk);
   perf_logger->dec(l_msgr_rdma_rx_bufs_in_use);
 }
 
@@ -176,7 +174,7 @@ void RDMADispatcher::polling()
       perf_logger->inc(l_msgr_rdma_rx_bufs_in_use, rx_ret);
 
       Mutex::Locker l(lock);//make sure connected socket alive when pass wc
-      global_infiniband->post_chunks_to_srq(rx_ret);
+      get_stack()->get_infiniband()->post_chunks_to_srq(rx_ret);
       for (int i = 0; i < rx_ret; ++i) {
         ibv_wc* response = &wc[i];
         Chunk* chunk = reinterpret_cast<Chunk *>(response->wr_id);
@@ -188,7 +186,7 @@ void RDMADispatcher::polling()
           conn = get_conn_lockless(response->qp_num);
           if (!conn) {
             ldout(cct, 1) << __func__ << " csi with qpn " << response->qp_num << " may be dead. chunk " << chunk << " will be back ? " << r << dendl;
-            global_infiniband->post_chunk_to_pool(chunk);
+            get_stack()->get_infiniband()->post_chunk_to_pool(chunk);
             perf_logger->dec(l_msgr_rdma_rx_bufs_in_use);
           } else {
 	    polled[conn].push_back(*response);
@@ -199,12 +197,12 @@ void RDMADispatcher::polling()
 
           ldout(cct, 1) << __func__ << " work request returned error for buffer(" << chunk
               << ") status(" << response->status << ":"
-              << global_infiniband->wc_status_to_string(response->status) << ")" << dendl;
+              << get_stack()->get_infiniband()->wc_status_to_string(response->status) << ")" << dendl;
           conn = get_conn_lockless(response->qp_num);
           if (conn && conn->is_connected())
             conn->fault();
 
-          global_infiniband->post_chunk_to_pool(chunk);
+          get_stack()->get_infiniband()->post_chunk_to_pool(chunk);
         }
       }
       for (auto &&i : polled)
@@ -335,7 +333,7 @@ void RDMADispatcher::handle_tx_event(ibv_wc *cqe, int n)
     Chunk* chunk = reinterpret_cast<Chunk *>(response->wr_id);
     ldout(cct, 25) << __func__ << " QP: " << response->qp_num
                    << " len: " << response->byte_len << " , addr:" << chunk
-                   << " " << global_infiniband->wc_status_to_string(response->status) << dendl;
+                   << " " << get_stack()->get_infiniband()->wc_status_to_string(response->status) << dendl;
 
     if (response->status != IBV_WC_SUCCESS) {
       perf_logger->inc(l_msgr_rdma_tx_total_wc_errors);
@@ -350,7 +348,7 @@ void RDMADispatcher::handle_tx_event(ibv_wc *cqe, int n)
       } else {
         ldout(cct, 1) << __func__ << " send work request returned error for buffer("
                       << response->wr_id << ") status(" << response->status << "): "
-                      << global_infiniband->wc_status_to_string(response->status) << dendl;
+                      << get_stack()->get_infiniband()->wc_status_to_string(response->status) << dendl;
       }
 
       Mutex::Locker l(lock);//make sure connected socket alive when pass wc
@@ -366,7 +364,7 @@ void RDMADispatcher::handle_tx_event(ibv_wc *cqe, int n)
 
     //TX completion may come either from regular send message or from 'fin' message.
     //In the case of 'fin' wr_id points to the QueuePair.
-    if (global_infiniband->get_memory_manager()->is_tx_buffer(chunk->buffer)) {
+    if (get_stack()->get_infiniband()->get_memory_manager()->is_tx_buffer(chunk->buffer)) {
       tx_chunks.push_back(chunk);
     } else if (reinterpret_cast<QueuePair*>(response->wr_id)->get_local_qp_number() == response->qp_num ) {
       ldout(cct, 1) << __func__ << " sending of the disconnect msg completed" << dendl;
@@ -394,7 +392,7 @@ void RDMADispatcher::post_tx_buffer(std::vector<Chunk*> &chunks)
     return ;
 
   inflight -= chunks.size();
-  global_infiniband->get_memory_manager()->return_tx(chunks);
+  get_stack()->get_infiniband()->get_memory_manager()->return_tx(chunks);
   ldout(cct, 30) << __func__ << " release " << chunks.size()
                  << " chunks, inflight " << inflight << dendl;
   notify_pending_workers();
@@ -438,9 +436,9 @@ void RDMAWorker::initialize()
 
 int RDMAWorker::listen(entity_addr_t &sa, const SocketOptions &opt,ServerSocket *sock)
 {
-  global_infiniband->init();
+  get_stack()->get_infiniband()->init();
 
-  auto p = new RDMAServerSocketImpl(cct, global_infiniband.get(), get_stack()->get_dispatcher(), this, sa);
+  auto p = new RDMAServerSocketImpl(cct, get_stack()->get_infiniband(), get_stack()->get_dispatcher(), this, sa);
   int r = p->listen(sa, opt);
   if (r < 0) {
     delete p;
@@ -453,9 +451,9 @@ int RDMAWorker::listen(entity_addr_t &sa, const SocketOptions &opt,ServerSocket 
 
 int RDMAWorker::connect(const entity_addr_t &addr, const SocketOptions &opts, ConnectedSocket *socket)
 {
-  global_infiniband->init();
+  get_stack()->get_infiniband()->init();
 
-  RDMAConnectedSocketImpl* p = new RDMAConnectedSocketImpl(cct, global_infiniband.get(), get_stack()->get_dispatcher(), this);
+  RDMAConnectedSocketImpl* p = new RDMAConnectedSocketImpl(cct, get_stack()->get_infiniband(), get_stack()->get_dispatcher(), this);
   int r = p->try_connect(addr, opts);
 
   if (r < 0) {
@@ -471,9 +469,9 @@ int RDMAWorker::connect(const entity_addr_t &addr, const SocketOptions &opts, Co
 int RDMAWorker::get_reged_mem(RDMAConnectedSocketImpl *o, std::vector<Chunk*> &c, size_t bytes)
 {
   assert(center.in_thread());
-  int r = global_infiniband->get_tx_buffers(c, bytes);
+  int r = get_stack()->get_infiniband()->get_tx_buffers(c, bytes);
   assert(r >= 0);
-  size_t got = global_infiniband->get_memory_manager()->get_tx_buffer_size() * r;
+  size_t got = get_stack()->get_infiniband()->get_memory_manager()->get_tx_buffer_size() * r;
   ldout(cct, 30) << __func__ << " need " << bytes << " bytes, reserve " << got << " registered  bytes, inflight " << dispatcher->inflight << dendl;
   stack->get_dispatcher()->inflight += r;
   if (got >= bytes)
@@ -543,12 +541,10 @@ RDMAStack::RDMAStack(CephContext *cct, const string &t): NetworkStack(cct, t)
 				  " We recommend setting this parameter to infinity" << dendl;
   }
 
-  if (!global_infiniband)
-    global_infiniband.construct(
-      cct, cct->_conf->ms_async_rdma_device_name, cct->_conf->ms_async_rdma_port_num);
-  ldout(cct, 20) << __func__ << " constructing RDMAStack..." << dendl;
+  ib = new Infiniband(cct, cct->_conf->ms_async_rdma_device_name, cct->_conf->ms_async_rdma_port_num);
+  ldout(cct, 20) << __func__ << " constructing Infiniband..." << dendl;
   dispatcher = new RDMADispatcher(cct, this);
-  global_infiniband->set_dispatcher(dispatcher);
+  ib->set_dispatcher(dispatcher);
 
   unsigned num = get_num_worker();
   for (unsigned i = 0; i < num; ++i) {
@@ -564,8 +560,8 @@ RDMAStack::~RDMAStack()
   if (cct->_conf->ms_async_rdma_enable_hugepage) {
     unsetenv("RDMAV_HUGEPAGES_SAFE");	//remove env variable on destruction
   }
-
   delete dispatcher;
+  delete ib;
 }
 
 void RDMAStack::spawn_worker(unsigned i, std::function<void ()> &&func)
