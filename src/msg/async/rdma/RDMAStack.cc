@@ -514,6 +514,8 @@ void RDMAWorker::handle_pending_message()
   dispatcher->notify_pending_workers();
 }
 
+bool RDMAStack::init = false;
+
 void RDMAStack::verify_prereq(CephContext *cct) {
 
   //On RDMA MUST be called before fork
@@ -540,11 +542,13 @@ void RDMAStack::verify_prereq(CephContext *cct) {
       lderr(cct) << __func__ << "!!! WARNING !!! For RDMA to work properly user memlock (ulimit -l) must be big enough to allow large amount of registered memory."
 				  " We recommend setting this parameter to infinity" << dendl;
    }
+   init = true;
 }
 
 RDMAStack::RDMAStack(CephContext *cct, const string &t): NetworkStack(cct, t)
 {
-  verify_prereq(cct);
+  if (!init)
+    verify_prereq(cct);
   ib = new Infiniband(cct);
   ldout(cct, 20) << __func__ << " constructing Infiniband..." << dendl;
   dispatcher = new RDMADispatcher(cct, this);
