@@ -848,15 +848,6 @@ Infiniband::~Infiniband()
   delete pd;
 }
 
-void Infiniband::set_dispatcher(RDMADispatcher *d)
-{
-  assert(!d ^ !dispatcher);
-
-  dispatcher = d;
-  if (dispatcher != nullptr)
-    MemoryManager::RxAllocator::set_perf_logger(dispatcher->perf_logger);
-}
-
 /**
  * Create a shared receive queue. This basically wraps the verbs call. 
  *
