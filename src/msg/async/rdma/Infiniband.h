@@ -327,11 +327,13 @@ class Infiniband {
   bool initialized = false;
   const std::string &device_name;
   uint8_t port_num;
+  static bool init_prereq;
 
  public:
   explicit Infiniband(CephContext *c);
   ~Infiniband();
   void init();
+  static void verify_prereq(CephContext *cct);
 
   class CompletionChannel {
     static const uint32_t MAX_ACK_EVENT = 5000;
