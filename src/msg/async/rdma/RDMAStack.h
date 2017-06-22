@@ -258,8 +258,7 @@ class RDMAStack : public NetworkStack {
   vector<std::thread> threads;
   RDMADispatcher *dispatcher;
   PerfCounters *perf_counter;
-  Infiniband *ib;
-  static bool init;
+  Infiniband ib;
 
   std::atomic<bool> fork_finished = {false};
 
@@ -272,9 +271,7 @@ class RDMAStack : public NetworkStack {
   virtual void spawn_worker(unsigned i, std::function<void ()> &&func) override;
   virtual void join_worker(unsigned i) override;
   RDMADispatcher *get_dispatcher() { return dispatcher; }
-  Infiniband* get_infiniband() { return ib; }
-  static void verify_prereq(CephContext *cct);
-  void set_infiniband(Infiniband *infiniband) { ib = infiniband; }
+  Infiniband &get_infiniband() { return ib; }
   virtual bool is_ready() override { return fork_finished.load(); };
   virtual void ready() override { fork_finished = true; };
 };
