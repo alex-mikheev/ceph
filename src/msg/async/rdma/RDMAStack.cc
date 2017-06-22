@@ -544,7 +544,6 @@ RDMAStack::RDMAStack(CephContext *cct, const string &t): NetworkStack(cct, t)
   ib = new Infiniband(cct, cct->_conf->ms_async_rdma_device_name, cct->_conf->ms_async_rdma_port_num);
   ldout(cct, 20) << __func__ << " constructing Infiniband..." << dendl;
   dispatcher = new RDMADispatcher(cct, this);
-  ib->set_dispatcher(dispatcher);
 
   unsigned num = get_num_worker();
   for (unsigned i = 0; i < num; ++i) {
