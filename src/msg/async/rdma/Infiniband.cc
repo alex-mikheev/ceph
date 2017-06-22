@@ -772,8 +772,10 @@ int Infiniband::MemoryManager::get_send_buffers(std::vector<Chunk*> &c, size_t b
   return send->get_buffers(c, bytes);
 }
 
-Infiniband::Infiniband(CephContext *cct, const std::string &device_name, uint8_t port_num)
-  : cct(cct), lock("IB lock"), device_name(device_name), port_num(port_num)
+Infiniband::Infiniband(CephContext *cct)
+  : cct(cct), lock("IB lock"),
+    device_name(cct->_conf->ms_async_rdma_device_name),
+    port_num( cct->_conf->ms_async_rdma_port_num)
 {
 }
 
@@ -832,16 +834,12 @@ void Infiniband::init()
   srq = create_shared_receive_queue(rx_queue_len, MAX_SHARED_RX_SGE_COUNT);
 
   post_chunks_to_srq(rx_queue_len); //add to srq
-  dispatcher->polling_start();
 }
 
 Infiniband::~Infiniband()
 {
   if (!initialized)
     return;
-
-  if (dispatcher)
-    dispatcher->polling_stop();
 
   ibv_destroy_srq(srq);
   delete memory_manager;

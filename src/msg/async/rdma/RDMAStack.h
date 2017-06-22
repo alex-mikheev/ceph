@@ -272,6 +272,7 @@ class RDMAStack : public NetworkStack {
   virtual void join_worker(unsigned i) override;
   RDMADispatcher *get_dispatcher() { return dispatcher; }
   Infiniband* get_infiniband() { return ib; }
+  static void verify_prereq(CephContext *cct);
   void set_infiniband(Infiniband *infiniband) { ib = infiniband; }
   virtual bool is_ready() override { return fork_finished.load(); };
   virtual void ready() override { fork_finished = true; };

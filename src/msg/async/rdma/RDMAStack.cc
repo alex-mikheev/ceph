@@ -44,8 +44,6 @@ RDMADispatcher::~RDMADispatcher()
   delete tx_cc;
   delete rx_cc;
   delete async_handler;
-
-  get_stack()->get_infiniband()->set_dispatcher(nullptr);
 }
 
 RDMADispatcher::RDMADispatcher(CephContext* c, RDMAStack* s)
@@ -83,6 +81,9 @@ RDMADispatcher::RDMADispatcher(CephContext* c, RDMAStack* s)
 
 void RDMADispatcher::polling_start()
 {
+  if (t.joinable()) 
+    return; // dispatcher thread already running 
+
   tx_cc = get_stack()->get_infiniband()->create_comp_channel(cct);
   assert(tx_cc);
   rx_cc = get_stack()->get_infiniband()->create_comp_channel(cct);
@@ -437,6 +438,7 @@ void RDMAWorker::initialize()
 int RDMAWorker::listen(entity_addr_t &sa, const SocketOptions &opt,ServerSocket *sock)
 {
   get_stack()->get_infiniband()->init();
+  dispatcher->polling_start();
 
   auto p = new RDMAServerSocketImpl(cct, get_stack()->get_infiniband(), get_stack()->get_dispatcher(), this, sa);
   int r = p->listen(sa, opt);
@@ -452,6 +454,7 @@ int RDMAWorker::listen(entity_addr_t &sa, const SocketOptions &opt,ServerSocket 
 int RDMAWorker::connect(const entity_addr_t &addr, const SocketOptions &opts, ConnectedSocket *socket)
 {
   get_stack()->get_infiniband()->init();
+  dispatcher->polling_start();
 
   RDMAConnectedSocketImpl* p = new RDMAConnectedSocketImpl(cct, get_stack()->get_infiniband(), get_stack()->get_dispatcher(), this);
   int r = p->try_connect(addr, opts);
@@ -511,37 +514,38 @@ void RDMAWorker::handle_pending_message()
   dispatcher->notify_pending_workers();
 }
 
+void RDMAStack::verify_prereq(CephContext *cct) {
+
+  //On RDMA MUST be called before fork
+   int rc = ibv_fork_init();
+   if (rc) {
+      lderr(cct) << __func__ << " failed to call ibv_for_init(). On RDMA must be called before fork. Application aborts." << dendl;
+      ceph_abort();
+   }
+
+   ldout(cct, 20) << __func__ << " ms_async_rdma_enable_hugepage value is: " << cct->_conf->ms_async_rdma_enable_hugepage <<  dendl;
+   if (cct->_conf->ms_async_rdma_enable_hugepage){
+     rc =  setenv("RDMAV_HUGEPAGES_SAFE","1",1);
+     ldout(cct, 20) << __func__ << " RDMAV_HUGEPAGES_SAFE is set as: " << getenv("RDMAV_HUGEPAGES_SAFE") <<  dendl;
+     if (rc) {
+       lderr(cct) << __func__ << " failed to export RDMA_HUGEPAGES_SAFE. On RDMA must be exported before using huge pages. Application aborts." << dendl;
+       ceph_abort();
+     }
+   }
+
+   //Check ulimit
+   struct rlimit limit;
+   getrlimit(RLIMIT_MEMLOCK, &limit);
+   if (limit.rlim_cur != RLIM_INFINITY || limit.rlim_max != RLIM_INFINITY) {
+      lderr(cct) << __func__ << "!!! WARNING !!! For RDMA to work properly user memlock (ulimit -l) must be big enough to allow large amount of registered memory."
+				  " We recommend setting this parameter to infinity" << dendl;
+   }
+}
+
 RDMAStack::RDMAStack(CephContext *cct, const string &t): NetworkStack(cct, t)
 {
-  //
-  //On RDMA MUST be called before fork
-  //
-
-  int rc = ibv_fork_init();
-  if (rc) {
-     lderr(cct) << __func__ << " failed to call ibv_for_init(). On RDMA must be called before fork. Application aborts." << dendl;
-     ceph_abort();
-  }
-
-  ldout(cct, 1) << __func__ << " ms_async_rdma_enable_hugepage value is: " << cct->_conf->ms_async_rdma_enable_hugepage <<  dendl;
-  if (cct->_conf->ms_async_rdma_enable_hugepage) {
-    rc =  setenv("RDMAV_HUGEPAGES_SAFE","1",1);
-    ldout(cct, 1) << __func__ << " RDMAV_HUGEPAGES_SAFE is set as: " << getenv("RDMAV_HUGEPAGES_SAFE") <<  dendl;
-    if (rc) {
-      lderr(cct) << __func__ << " failed to export RDMA_HUGEPAGES_SAFE. On RDMA must be exported before using huge pages. Application aborts." << dendl;
-      ceph_abort();
-    }
-  }
-
-  //Check ulimit
-  struct rlimit limit;
-  getrlimit(RLIMIT_MEMLOCK, &limit);
-  if (limit.rlim_cur != RLIM_INFINITY || limit.rlim_max != RLIM_INFINITY) {
-     lderr(cct) << __func__ << "!!! WARNING !!! For RDMA to work properly user memlock (ulimit -l) must be big enough to allow large amount of registered memory."
-				  " We recommend setting this parameter to infinity" << dendl;
-  }
-
-  ib = new Infiniband(cct, cct->_conf->ms_async_rdma_device_name, cct->_conf->ms_async_rdma_port_num);
+  verify_prereq(cct);
+  ib = new Infiniband(cct);
   ldout(cct, 20) << __func__ << " constructing Infiniband..." << dendl;
   dispatcher = new RDMADispatcher(cct, this);
 
@@ -559,6 +563,10 @@ RDMAStack::~RDMAStack()
   if (cct->_conf->ms_async_rdma_enable_hugepage) {
     unsetenv("RDMAV_HUGEPAGES_SAFE");	//remove env variable on destruction
   }
+
+  if (dispatcher)
+    dispatcher->polling_stop();
+
   delete dispatcher;
   delete ib;
 }

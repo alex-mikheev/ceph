@@ -329,7 +329,7 @@ class Infiniband {
   uint8_t port_num;
 
  public:
-  explicit Infiniband(CephContext *c, const std::string &device_name, uint8_t p);
+  explicit Infiniband(CephContext *c);
   ~Infiniband();
   void init();
 
