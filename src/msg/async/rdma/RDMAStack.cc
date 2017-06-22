@@ -29,20 +29,14 @@
 
 RDMADispatcher::~RDMADispatcher()
 {
-  polling_stop();
   ldout(cct, 20) << __func__ << " destructing rdma dispatcher" << dendl;
+  polling_stop();
 
   assert(qp_conns.empty());
   assert(num_qp_conn == 0);
   assert(dead_queue_pairs.empty());
   assert(num_dead_queue_pair == 0);
 
-  tx_cc->ack_events();
-  rx_cc->ack_events();
-  delete tx_cq;
-  delete rx_cq;
-  delete tx_cc;
-  delete rx_cc;
   delete async_handler;
 }
 
@@ -81,6 +75,9 @@ RDMADispatcher::RDMADispatcher(CephContext* c, RDMAStack* s)
 
 void RDMADispatcher::polling_start()
 {
+  // take lock because listen/connect can happen from different worker threads
+  Mutex::Locker l(lock);
+
   if (t.joinable()) 
     return; // dispatcher thread already running 
 
@@ -99,8 +96,17 @@ void RDMADispatcher::polling_start()
 void RDMADispatcher::polling_stop()
 {
   done = true;
-  if (t.joinable())
-    t.join();
+  if (!t.joinable())
+    return;
+
+  t.join();
+
+  tx_cc->ack_events();
+  rx_cc->ack_events();
+  delete tx_cq;
+  delete rx_cq;
+  delete tx_cc;
+  delete rx_cc;
 }
 
 void RDMADispatcher::handle_async_event()
@@ -535,8 +541,7 @@ RDMAStack::~RDMAStack()
     unsetenv("RDMAV_HUGEPAGES_SAFE");	//remove env variable on destruction
   }
 
-  if (dispatcher)
-    dispatcher->polling_stop();
+  dispatcher->polling_stop();
 
   delete dispatcher;
 }
