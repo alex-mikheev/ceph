@@ -437,7 +437,7 @@ RDMAWorker::~RDMAWorker()
 void RDMAWorker::initialize()
 {
   if (!dispatcher) {
-    dispatcher = stack->get_dispatcher();
+    dispatcher = &stack->get_dispatcher();
   }
 }
 
@@ -446,7 +446,7 @@ int RDMAWorker::listen(entity_addr_t &sa, const SocketOptions &opt,ServerSocket 
   get_stack()->get_infiniband().init();
   dispatcher->polling_start();
 
-  auto p = new RDMAServerSocketImpl(cct, &get_stack()->get_infiniband(), get_stack()->get_dispatcher(), this, sa);
+  auto p = new RDMAServerSocketImpl(cct, &get_stack()->get_infiniband(), &get_stack()->get_dispatcher(), this, sa);
   int r = p->listen(sa, opt);
   if (r < 0) {
     delete p;
@@ -462,7 +462,7 @@ int RDMAWorker::connect(const entity_addr_t &addr, const SocketOptions &opts, Co
   get_stack()->get_infiniband().init();
   dispatcher->polling_start();
 
-  RDMAConnectedSocketImpl* p = new RDMAConnectedSocketImpl(cct, &get_stack()->get_infiniband(), get_stack()->get_dispatcher(), this);
+  RDMAConnectedSocketImpl* p = new RDMAConnectedSocketImpl(cct, &get_stack()->get_infiniband(), &get_stack()->get_dispatcher(), this);
   int r = p->try_connect(addr, opts);
 
   if (r < 0) {
@@ -482,7 +482,7 @@ int RDMAWorker::get_reged_mem(RDMAConnectedSocketImpl *o, std::vector<Chunk*> &c
   assert(r >= 0);
   size_t got = get_stack()->get_infiniband().get_memory_manager()->get_tx_buffer_size() * r;
   ldout(cct, 30) << __func__ << " need " << bytes << " bytes, reserve " << got << " registered  bytes, inflight " << dispatcher->inflight << dendl;
-  stack->get_dispatcher()->inflight += r;
+  stack->get_dispatcher().inflight += r;
   if (got >= bytes)
     return r;
 
@@ -521,18 +521,16 @@ void RDMAWorker::handle_pending_message()
 }
 
 RDMAStack::RDMAStack(CephContext *cct, const string &t)
-  : NetworkStack(cct, t), ib(cct)
+  : NetworkStack(cct, t), ib(cct), dispatcher(cct, this)
 {
   ldout(cct, 20) << __func__ << " constructing RDMAStack..." << dendl;
-  dispatcher = new RDMADispatcher(cct, this);
 
   unsigned num = get_num_worker();
   for (unsigned i = 0; i < num; ++i) {
     RDMAWorker* w = dynamic_cast<RDMAWorker*>(get_worker(i));
     w->set_stack(this);
   }
-
-  ldout(cct, 20) << " creating RDMAStack:" << this << " with dispatcher:" << dispatcher << dendl;
+  ldout(cct, 20) << " creating RDMAStack:" << this << " with dispatcher:" << &dispatcher << dendl;
 }
 
 RDMAStack::~RDMAStack()
@@ -541,9 +539,7 @@ RDMAStack::~RDMAStack()
     unsetenv("RDMAV_HUGEPAGES_SAFE");	//remove env variable on destruction
   }
 
-  dispatcher->polling_stop();
-
-  delete dispatcher;
+  dispatcher.polling_stop();
 }
 
 void RDMAStack::spawn_worker(unsigned i, std::function<void ()> &&func)
