@@ -691,7 +691,7 @@ char *Infiniband::MemoryManager::PoolAllocator::malloc(const size_type bytes)
   CephContext *cct;
 
   assert(g_ctx);
-  manager     = g_ctx->manager;
+  manager     = g_ctx->get_manager();
   cct         = manager->cct;
   rx_buf_size = sizeof(Chunk) + cct->_conf->ms_async_rdma_buffer_size;
   nbufs       = bytes/rx_buf_size;
@@ -743,7 +743,7 @@ void Infiniband::MemoryManager::PoolAllocator::free(char * const block)
   m = reinterpret_cast<mem_info *>(block) - 1;
   m->ctx->update_stats(-m->nbufs);
   ibv_dereg_mr(m->mr);
-  m->ctx->manager->free(m);
+  m->ctx->get_manager()->free(m);
 }
 
 Infiniband::MemoryManager::MemoryManager(CephContext *c, Device *d, ProtectionDomain *p)
