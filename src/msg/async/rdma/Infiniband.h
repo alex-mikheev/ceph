@@ -242,20 +242,18 @@ class Infiniband {
     };
 
     class pool_context {
-        PerfCounters *perf_logger;
+        PerfCounters *perf_logger = nullptr;
+        unsigned n_bufs_allocated = 0;
+        MemoryManager *manager;
 
       public:
-        MemoryManager *manager;
-        unsigned n_bufs_allocated;
+        pool_context(MemoryManager *m) : manager(m) {}
         // true if it is possible to alloc
         // more memory for the pool
-        pool_context(MemoryManager *m) :
-          perf_logger(nullptr),
-          manager(m),
-          n_bufs_allocated(0) {}
         bool can_alloc(unsigned nbufs);
         void update_stats(int val);
         void set_stat_logger(PerfCounters *logger);
+        MemoryManager *get_manager() { return manager; }
     };
 
     class PoolAllocator {
