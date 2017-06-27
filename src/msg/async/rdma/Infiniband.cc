@@ -638,7 +638,8 @@ bool Infiniband::MemoryManager::pool_context::can_alloc(unsigned nbufs)
   if (n_bufs_allocated + nbufs > (unsigned)manager->cct->_conf->ms_async_rdma_receive_buffers) {
     lderr(manager->cct) << __func__ << " WARNING: OUT OF RX BUFFERS: allocated: " <<
         n_bufs_allocated << " requested: " << nbufs <<
-        " limit: " << manager->cct->_conf->ms_async_rdma_receive_buffers << dendl;
+        " limit: " << manager->cct->_conf->ms_async_rdma_receive_buffers << 
+        " consider increasing 'ms_async_rdma_receive_buffers'" << dendl;
     return false;
   }
 
