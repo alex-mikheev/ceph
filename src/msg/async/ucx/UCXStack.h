@@ -25,7 +25,22 @@
 #include "common/errno.h"
 #include "msg/async/Stack.h"
 
+extern "C" {
+#include <ucp/api/ucp.h>
+};
+
+class UCXStack;
+
+struct ucx_connect_message {
+  uint64_t tag;
+  uint16_t addr_len;
+} __attribute__ ((packed));
+
 class UCXWorker : public Worker {
+  ucp_worker_h ucp_worker;
+  UCXStack *stack;
+  ucp_address_t *ucp_addr;
+  size_t ucp_addr_len;
 
  public:
   explicit UCXWorker(CephContext *c, unsigned i);
@@ -33,35 +48,66 @@ class UCXWorker : public Worker {
   virtual int listen(entity_addr_t &addr, const SocketOptions &opts, ServerSocket *) override;
   virtual int connect(const entity_addr_t &addr, const SocketOptions &opts, ConnectedSocket *socket) override;
   virtual void initialize() override;
+  virtual void destroy() override;
+
+  void set_stack(UCXStack *s);
+  UCXStack *get_stack() { return stack; }
+  ucp_worker_h get_ucp_worker() { return ucp_worker; }
+
+  // p2p ucp
+  int send_addr(int sock, uint64_t tag);
+  // recv address and create ep
+  int recv_addr(int sock, ucp_ep_h *ep, uint64_t *tag);
 };
 
 class UCXConnectedSocketImpl : public ConnectedSocketImpl {
+  private:
+    uint64_t  dst_tag;
+    ucp_ep_h  ucp_ep;
+    UCXWorker *worker;
+    int tcp_fd;
+    int state;
+
+    CephContext *cct() { return worker->cct; }
   public:
     UCXConnectedSocketImpl(UCXWorker *w);
     virtual ~UCXConnectedSocketImpl();
 
-    virtual int is_connected();
-    virtual ssize_t read(char*, size_t);
-    virtual ssize_t zero_copy_read(bufferptr&);
-    virtual ssize_t send(bufferlist &bl, bool more);
-    virtual void shutdown();
-    virtual void close();
-    virtual int fd();
+    int connect(const entity_addr_t& peer_addr, const SocketOptions &opt);
+    int accept(int server_sock, entity_addr_t *out, const SocketOptions &opt);
+
+    // interface functions
+    virtual int is_connected() override;
+    virtual ssize_t read(char*, size_t) override;
+    virtual ssize_t zero_copy_read(bufferptr&) override;
+    virtual ssize_t send(bufferlist &bl, bool more) override;
+    virtual void shutdown() override;
+    virtual void close() override;
+    virtual int fd() const override { return tcp_fd; }
 };
 
 class UCXServerSocketImpl : public ServerSocketImpl {
+  private:
+    UCXWorker *worker;
+    int tcp_fd = -1;
 
+    CephContext *cct() { return worker->cct; }
   public:
-    UCXServerSocketImpl(UCXWorker *w, entity_addr_t& a);
+    UCXServerSocketImpl(UCXWorker *w);
+    ~UCXServerSocketImpl();
 
-    virtual int accept(ConnectedSocket *sock, const SocketOptions &opt, entity_addr_t *out, Worker *w) = 0;
-    virtual void abort_accept() = 0;
+    int listen(entity_addr_t &sa, const SocketOptions &opt);
+
+    // interface functions
+    virtual int accept(ConnectedSocket *sock, const SocketOptions &opt, entity_addr_t *out, Worker *w) override;
+    virtual void abort_accept() override;
     // Get file descriptor
-    virtual int fd() const = 0;
+    virtual int fd() const override { return tcp_fd; }
 };
 
 class UCXStack : public NetworkStack {
   vector<std::thread> threads;
+  ucp_context_h ucp_context;
  public:
   explicit UCXStack(CephContext *cct, const string &t);
   virtual ~UCXStack();
@@ -71,6 +117,7 @@ class UCXStack : public NetworkStack {
   virtual void spawn_worker(unsigned i, std::function<void ()> &&func) override;
   virtual void join_worker(unsigned i) override;
 
+  ucp_context_h get_ucp_context() { return ucp_context; }
 };
 
 #endif
