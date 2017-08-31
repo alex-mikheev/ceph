@@ -19,6 +19,7 @@
 
 #include <vector>
 #include <thread>
+#include <deque>
 
 #include "common/ceph_context.h"
 #include "common/debug.h"
@@ -30,17 +31,47 @@ extern "C" {
 };
 
 class UCXStack;
+class UCXConnectedSocketImpl;
 
 struct ucx_connect_message {
   uint64_t tag;
   uint16_t addr_len;
 } __attribute__ ((packed));
 
+struct ucx_rx_buf {
+  size_t length;
+  size_t offset;
+  char data[0];
+};
+
+
+struct ucx_req_descr {
+  class UCXConnectedSocketImpl *conn;
+  bufferlist *bl;
+  ucp_dt_iov_t *iov_list;
+  ucx_rx_buf *rx_buf;
+};
+
 class UCXWorker : public Worker {
   ucp_worker_h ucp_worker;
   UCXStack *stack;
   ucp_address_t *ucp_addr;
   size_t ucp_addr_len;
+  EventCallbackRef progress_cb;
+  int ucp_fd;
+  
+  class C_handle_worker_progress : public EventCallback {
+    UCXWorker *worker;
+    public:
+    C_handle_worker_progress(UCXWorker *w): worker(w) {}
+    void do_request(int fd) {
+      worker->ucp_progress();
+    }
+  };
+
+  void ucp_progress(); 
+  // pass received messages to socket(s)
+  void dispatch_rx();
 
  public:
   explicit UCXWorker(CephContext *c, unsigned i);
@@ -68,7 +99,11 @@ class UCXConnectedSocketImpl : public ConnectedSocketImpl {
     int tcp_fd;
     int state;
 
+    std::deque<ucx_rx_buf *> rx_queue;
+
     CephContext *cct() { return worker->cct; }
+    EventCallbackRef read_progress = nullptr;
+    EventCallbackRef write_progress = nullptr;
   public:
     UCXConnectedSocketImpl(UCXWorker *w);
     virtual ~UCXConnectedSocketImpl();
@@ -84,6 +119,28 @@ class UCXConnectedSocketImpl : public ConnectedSocketImpl {
     virtual void shutdown() override;
     virtual void close() override;
     virtual int fd() const override { return tcp_fd; }
+    virtual void set_event_handlers(EventCallbackRef read_handler, EventCallbackRef write_handler) {
+      read_progress = read_handler;
+      write_progress = write_handler;
+    }
+
+    // receive dispatch
+
+    //ucp request magic
+    static void request_init(void *req);
+    static void request_cleanup(void *req);
+
+    static void send_completion_cb(void *request, ucs_status_t status);
+    void send_completion(ucx_req_descr *descr) {
+      descr->bl->clear();
+      if (descr->iov_list) 
+        delete descr->iov_list;
+    }
+    // recv side
+    static void recv_completion_cb(void *request, ucs_status_t status,
+                            ucp_tag_recv_info_t *info);
+
+    void dispatch_rx(ucx_rx_buf *buf);
 };
 
 class UCXServerSocketImpl : public ServerSocketImpl {

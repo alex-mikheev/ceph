@@ -109,12 +109,12 @@ int UCXConnectedSocketImpl::accept(int server_sock, entity_addr_t *out, const So
   if (ret != 0)
     goto err;
 
-  lderr(cct()) << __func__ << "ADDRESS RECVD" << dendl;
+  lderr(cct()) << __func__ << " ADDRESS RECVD" << dendl;
   ret = worker->send_addr(tcp_fd, reinterpret_cast<uint64_t>(this));
   if (ret != 0) 
     goto err;
 
-  lderr(cct()) << __func__ << "ADDRESS SENT" << dendl;
+  lderr(cct()) << __func__ << " ADDRESS SENT" << dendl;
   return 0;
 
 err:
@@ -125,10 +125,31 @@ err:
 }
     
 
-ssize_t UCXConnectedSocketImpl::read(char*, size_t)
+ssize_t UCXConnectedSocketImpl::read(char *buf, size_t len)
 {
   lderr(cct()) << __func__ << dendl;
-  return 0;
+  if (rx_queue.empty()) 
+    return -EAGAIN;
+
+  ucx_rx_buf *rx_buf;
+
+  rx_buf = rx_queue.front();
+
+  size_t left = rx_buf->length - rx_buf->offset;
+
+  ldout(cct(), 20) << __func__ << "read to " << buf << " wanted " << len <<
+    " left " << left << dendl;
+
+  if (len < left) {
+    memcpy(buf, rx_buf->data, len);
+    rx_buf->offset += len;
+    return len;
+  } 
+  // TODO: copy more data
+  memcpy(buf, rx_buf->data, left);
+  rx_queue.pop_front();
+  free(rx_buf);
+  return left;
 }
 
 ssize_t UCXConnectedSocketImpl::zero_copy_read(bufferptr&)
@@ -137,15 +158,114 @@ ssize_t UCXConnectedSocketImpl::zero_copy_read(bufferptr&)
   return 0;
 }
 
+void UCXConnectedSocketImpl::send_completion_cb(void *req, ucs_status_t status)
+{
+  ucx_req_descr *desc = static_cast<ucx_req_descr *>(req);
+
+  desc->conn->send_completion(desc);
+  lderr(desc->conn->cct()) << __func__ << " completed send request " << req << dendl;
+  //ucp_request_free(req);
+  desc->conn = NULL;
+  ucp_request_release(req);
+}
+
+void UCXConnectedSocketImpl::dispatch_rx(ucx_rx_buf *buf)
+{
+  //queue
+  buf->offset = 0;
+  rx_queue.push_back(buf);
+  // todo kick read
+  if (read_progress) 
+    read_progress->do_request(0);
+}
+
+void UCXConnectedSocketImpl::recv_completion_cb(void *req, ucs_status_t status,
+                                ucp_tag_recv_info_t *info)
+{
+  ucx_req_descr *desc = static_cast<ucx_req_descr *>(req);
+
+  if (desc->conn) {
+    lderr(desc->conn->cct()) << __func__ << " completed recv request " << req << dendl;
+    desc->conn->dispatch_rx(desc->rx_buf);
+  }
+  ucp_request_release(req);
+}
+
+void UCXConnectedSocketImpl::request_init(void *req) 
+{ 
+  ucx_req_descr *desc = static_cast<ucx_req_descr *>(req);
+  desc->conn = NULL;
+  desc->bl = new bufferlist;
+}
+
+void UCXConnectedSocketImpl::request_cleanup(void *req) 
+{ 
+  ucx_req_descr *desc = static_cast<ucx_req_descr *>(req);
+
+  delete desc->bl;
+}
+
+
 ssize_t UCXConnectedSocketImpl::send(bufferlist &bl, bool more)
 {
-  lderr(cct()) << __func__ << dendl;
+  unsigned iov_cnt = bl.get_num_buffers();
+  unsigned total_len = bl.length();
+  ucx_req_descr *req;
+  int n;
+  ucp_dt_iov_t *iov_list;
+  char ll[256];
+
+  if (total_len == 0)  // TODO: shouldnt happen
+    return 0;
+
+  ldout(cct(), 15) << __func__ << " sending " << total_len << 
+    " bytes. iov_cnt " << iov_cnt << " to " << dst_tag << dendl;
+
+  std::list<bufferptr>::const_iterator i = bl.buffers().begin();
+  if (iov_cnt == 1) {
+    iov_list = 0;
+    req = static_cast<ucx_req_descr *>(ucp_tag_send_nb(ucp_ep, 
+          i->c_str(), i->length(), ucp_dt_make_contig(1), 
+          dst_tag, send_completion_cb));
+  }
+  else {
+    n = 0;
+    // TODO: pool alloc, or ucx optimization...
+    iov_list = new ucp_dt_iov_t[iov_cnt];
+    for (n = 0; i != bl.buffers().end(); ++i, n++) {
+      iov_list[n].buffer = reinterpret_cast<void *>(const_cast<char *>(i->c_str()));
+      iov_list[n].length = i->length();
+      snprintf(ll, sizeof(ll), "iov %d: %p len %d", n, iov_list[n].buffer, iov_list[n].length);
+      ldout(cct(), 15) << __func__ << " " << ll << dendl;
+    }
+
+    req = static_cast<ucx_req_descr *>(ucp_tag_send_nb(ucp_ep, iov_list, iov_cnt, ucp_dt_make_iov(), 
+          dst_tag, send_completion_cb));
+  }
+
+  if (req == NULL) {
+    /* in place completion */
+    ldout(cct(), 20) << __func__ << " SENT IN PLACE " << dendl;
+    bl.clear();
+    return 0;
+  }
+  if (UCS_PTR_IS_ERR(req)) {
+    return -1;
+  } 
+
+  req->conn = this;
+  req->bl->claim_append(bl);
+  req->iov_list = iov_list;
+  ldout(cct(), 20) << __func__ << " send in progress req " << req << dendl;
+
   return 0;
 }
 
 void UCXConnectedSocketImpl::shutdown()
 {
   lderr(cct()) << __func__ << dendl;
+  /* TODO: free request */
+  ucp_disconnect_nb(ucp_ep);
 }
 
 void UCXConnectedSocketImpl::close()
@@ -229,13 +349,14 @@ void UCXServerSocketImpl::abort_accept()
 }
 
 UCXWorker::UCXWorker(CephContext *c, unsigned i) :
-  Worker(c, i)
+  Worker(c, i), progress_cb(new C_handle_worker_progress(this))
 {
   
 }
 
 UCXWorker::~UCXWorker()
 {
+  delete progress_cb;
 }
 
 int UCXWorker::listen(entity_addr_t &addr, const SocketOptions &opts, ServerSocket *sock)
@@ -252,7 +373,6 @@ int UCXWorker::listen(entity_addr_t &addr, const SocketOptions &opts, ServerSock
   return 0;
 }
 
-
 int UCXWorker::connect(const entity_addr_t &addr, const SocketOptions &opts, ConnectedSocket *sock)
 {
   UCXConnectedSocketImpl *p = new UCXConnectedSocketImpl(this);
@@ -266,6 +386,66 @@ int UCXWorker::connect(const entity_addr_t &addr, const SocketOptions &opts, Con
   std::unique_ptr<UCXConnectedSocketImpl> csi(p);
   *sock = ConnectedSocket(std::move(csi));
   return 0;
+}
+
+void UCXWorker::dispatch_rx()
+{
+  ucp_tag_message_h msg;
+  ucp_tag_recv_info_t msg_info;
+  ucx_rx_buf *rx_buf;
+  ucx_req_descr *req;
+  UCXConnectedSocketImpl *conn;
+  
+  msg = ucp_tag_probe_nb(ucp_worker, -1, 0, 1, &msg_info);
+  if (msg == NULL) 
+    return;
+
+  ldout(cct, 20) << __func__ << " message on socket " << msg_info.sender_tag << " len " << msg_info.length << dendl;
+
+  rx_buf = (ucx_rx_buf *)malloc(sizeof(*rx_buf) + msg_info.length);
+  rx_buf->length = msg_info.length;
+  conn = reinterpret_cast<UCXConnectedSocketImpl *>(msg_info.sender_tag);
+
+  req = reinterpret_cast<ucx_req_descr *>(ucp_tag_msg_recv_nb(ucp_worker, rx_buf->data, rx_buf->length, 
+                      ucp_dt_make_contig(1), msg, UCXConnectedSocketImpl::recv_completion_cb));
+  if (UCS_PTR_IS_ERR(req)) { 
+    lderr(cct) << __func__ << " FAILED to rx message socket " << msg_info.sender_tag << " len " << msg_info.length << dendl;
+    return;
+  }
+  if (ucp_request_test(req, &msg_info) == UCS_INPROGRESS) {
+    req->rx_buf = rx_buf;
+    req->conn = conn; 
+  } else {
+    ldout(cct, 20) << __func__ << " rx completion in place " << dendl;
+    conn->dispatch_rx(rx_buf);
+  }
+
+}
+
+void UCXWorker::ucp_progress()
+{
+  int ev_count = 0;
+  ucs_status_t status;
+
+  while (1) {
+    // work around ucx progress bug
+    //for (int i = 0; i < 5; i++)  {
+      ucp_worker_progress(ucp_worker);
+    //}
+    // check for completions... 
+    // dispatch rx state machine
+    dispatch_rx();
+    status = ucp_worker_arm(ucp_worker);
+    ev_count++;
+
+    if (status == UCS_OK) {
+      break;
+    } else if (status == UCS_ERR_BUSY) {
+      continue;
+    } else {
+    }
+  }
+  ldout(cct, 20) << __func__ << " handler " << ev_count << " events " << dendl;
 }
 
 void UCXWorker::initialize()
@@ -290,11 +470,21 @@ void UCXWorker::initialize()
     lderr(cct) << __func__ << " failed to obtain worker address " << dendl;
     ceph_abort();
   }
+
+  // add event fd
+  status = ucp_worker_get_efd(ucp_worker, &ucp_fd);
+  if (status != UCS_OK) {
+    lderr(cct) << __func__ << " failed to obtain worker event fd " << dendl;
+    ceph_abort();
+  }
+  center.create_file_event(ucp_fd, EVENT_READABLE, progress_cb);
+  ucp_progress();
 } 
 
 void UCXWorker::destroy()
 {
   ucp_worker_release_address(ucp_worker, ucp_addr);
+  center.delete_file_event(ucp_fd, EVENT_READABLE);
   ucp_worker_destroy(ucp_worker);
 } 
 
@@ -386,11 +576,17 @@ UCXStack::UCXStack(CephContext *cct, const string &t) :
 
     memset(&params, 0, sizeof(params));
     params.field_mask = UCP_PARAM_FIELD_FEATURES|
+                        UCP_PARAM_FIELD_REQUEST_SIZE|
+                        UCP_PARAM_FIELD_REQUEST_INIT|
+                        UCP_PARAM_FIELD_REQUEST_CLEANUP|
                         UCP_PARAM_FIELD_TAG_SENDER_MASK|
                         UCP_PARAM_FIELD_MT_WORKERS_SHARED;
     params.features   = UCP_FEATURE_TAG|UCP_FEATURE_WAKEUP;
     params.mt_workers_shared = 1;
     params.tag_sender_mask = -1;
+    params.request_size    = sizeof(ucx_req_descr);
+    params.request_init    = UCXConnectedSocketImpl::request_init;
+    params.request_cleanup = UCXConnectedSocketImpl::request_cleanup;
 
     status = ucp_init(&params, ucp_config, &ucp_context);
     ucp_config_release(ucp_config);
